@@ -3,7 +3,10 @@ import re
 import subprocess
 import sys
 
+import kipy
 import pytest
+from kipy.errors import ApiError
+from kipy.proto.common.envelope_pb2 import ApiStatusCode
 from loguru import logger
 
 from kistitch import cli, overlay, placement, pourstitch_command, returnvia_command
@@ -340,3 +343,51 @@ def test_importing_the_cli_leaves_scipy_skimage_and_matplotlib_unloaded():
     )
 
     assert result.stdout.strip() == "[]"
+
+
+class BusyBoard:
+    def __getattr__(self, name):
+        def busy(*args, **kwargs):
+            raise ApiError("busy", code=ApiStatusCode.AS_BUSY)
+
+        return busy
+
+
+class BusyKiCad:
+    def get_board(self):
+        return BusyBoard()
+
+
+@pytest.mark.usefixtures("restore_default_sink")
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["padvia"],
+        ["pourstitch"],
+        ["returnvia"],
+        ["clear"],
+    ],
+)
+def test_busy_kicad_exits_without_a_traceback(monkeypatch, capsys, argv):
+    monkeypatch.setattr(kipy, "KiCad", BusyKiCad)
+    monkeypatch.setattr(sys, "argv", ["kistitch", *argv])
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+
+    assert exit_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "KiCad is busy" in err
+    assert "Traceback" not in err
+
+
+@pytest.mark.usefixtures("restore_default_sink")
+def test_other_kicad_errors_still_raise(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise ApiError("bad request")
+
+    monkeypatch.setattr(cli, "run_placement", refuse)
+    monkeypatch.setattr(sys, "argv", ["kistitch", "padvia"])
+
+    with pytest.raises(ApiError):
+        cli.main()
