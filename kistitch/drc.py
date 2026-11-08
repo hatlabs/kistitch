@@ -21,7 +21,7 @@ from loguru import logger
 from shapely.geometry import LineString, Point
 
 from kistitch.plan import Plan, PlannedUnit, Planner
-from kistitch.snapshot import Point2, Snapshot
+from kistitch.snapshot import Point2, Snapshot, kicad_busy
 
 KICAD_CLI = "kicad-cli"
 KNOWN_KICAD_CLI_PATHS: tuple[str, ...] = (
@@ -96,6 +96,8 @@ def locate_kicad_cli(explicit: str | None, kicad: BinaryPathSource | None) -> Pa
         try:
             found = _executable(kicad.get_kicad_binary_path(KICAD_CLI))
         except (ApiError, KiCadConnectionError) as e:  # older KiCad lacks the call
+            if kicad_busy(e):
+                raise
             logger.debug(f"KiCad did not report a kicad-cli path: {e}")
             found = None
         if found:

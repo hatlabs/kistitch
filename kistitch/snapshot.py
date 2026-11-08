@@ -20,6 +20,7 @@ from kipy.errors import ApiError
 from kipy.errors import ConnectionError as KiCadConnectionError
 from kipy.geometry import PolygonWithHoles, PolyLine, Vector2
 from kipy.proto.board.board_types_pb2 import BoardLayer, PadType, ZoneType
+from kipy.proto.common.envelope_pb2 import ApiStatusCode
 from kipy.util.board_layer import canonical_name
 from loguru import logger
 from shapely.geometry import LineString, Point, Polygon
@@ -534,12 +535,19 @@ def _edge_paths(shape: kipy.board_types.BoardShape) -> list[list[Point2]]:
     return []
 
 
+def kicad_busy(e: Exception) -> bool:
+    """True when KiCad refused a call because it is busy."""
+    return isinstance(e, ApiError) and e.code == ApiStatusCode.AS_BUSY
+
+
 def _layer_name(
     board: kipy.board.Board, canonical: str, layer_id: BoardLayer.ValueType
 ) -> str:
     try:
         return board.get_layer_name(layer_id) or canonical
     except (ApiError, KiCadConnectionError) as e:
+        if kicad_busy(e):
+            raise
         logger.debug(f"KiCad did not report the name of {canonical}: {e}")
         return canonical
 

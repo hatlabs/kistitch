@@ -497,3 +497,15 @@ def test_layer_names_fall_back_to_canonical_when_the_board_cannot_say():
     snap = read(FakeBoard(layer_names=None))
 
     assert snap.layer_names == {"F.Cu": "F.Cu", "B.Cu": "B.Cu"}
+
+
+class BusyLayerNameBoard(FakeBoard):
+    def get_layer_name(self, layer):
+        raise ApiError("busy", code=ApiStatusCode.AS_BUSY)
+
+
+def test_a_busy_layer_name_read_is_not_taken_for_the_canonical_name():
+    with pytest.raises(ApiError) as error:
+        read(BusyLayerNameBoard())
+
+    assert error.value.code == ApiStatusCode.AS_BUSY
