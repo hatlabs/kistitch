@@ -8,6 +8,7 @@ from pathlib import Path
 
 import kipy.board
 import kipy.board_types
+from kipy.errors import ApiError
 from loguru import logger
 
 import kistitch.overlay
@@ -37,12 +38,18 @@ from kistitch.snapshot import (
     NoBoardOutlineError,
     Snapshot,
     ViaSize,
+    kicad_busy,
     outline_from_edge_paths,
     read_edge_paths,
 )
 
 # Placement failures that leave the board untouched and need no traceback.
 PLACEMENT_ERRORS = (SplitError, BoardChangedError, NoBoardOutlineError)
+
+KICAD_BUSY_MESSAGE = (
+    "KiCad is busy, most likely with a tool or dialog open in the PCB editor; "
+    "close it and run again"
+)
 
 
 @contextmanager
@@ -52,6 +59,18 @@ def _exit_on(*errors: type[Exception]) -> Iterator[None]:
         yield
     except errors as e:
         logger.error(str(e))
+        raise SystemExit(1) from None
+
+
+@contextmanager
+def _exit_on_busy() -> Iterator[None]:
+    """Report KiCad refusing a call while a tool or dialog is open, and exit 1."""
+    try:
+        yield
+    except ApiError as e:
+        if not kicad_busy(e):
+            raise
+        logger.error(KICAD_BUSY_MESSAGE)
         raise SystemExit(1) from None
 
 
@@ -414,16 +433,16 @@ def main():
     configure_logging()
     args = parse_args()
 
-    match args.command:
-        case "padvia":
-            execute_padvia(args)
-        case "pourstitch":
-            execute_pourstitch(args)
-        case "returnvia":
-            execute_returnvia(args)
-
-        case "clear":
-            execute_clear(args)
+    with _exit_on_busy():
+        match args.command:
+            case "padvia":
+                execute_padvia(args)
+            case "pourstitch":
+                execute_pourstitch(args)
+            case "returnvia":
+                execute_returnvia(args)
+            case "clear":
+                execute_clear(args)
 
 
 if __name__ == "__main__":

@@ -1008,3 +1008,31 @@ def test_run_removes_earlier_circle_markers(saved_board):
     placement.run_placement(plan_at((1, 1)), None, placement.RunSettings("t"), kicad)
 
     assert board.removed == [stale]
+
+
+class BusyPushBoard:
+    def __init__(self):
+        self.dropped = False
+
+    def push_commit(self, commit, label):
+        raise busy()
+
+    def drop_commit(self, commit):
+        self.dropped = True
+        raise busy()
+
+
+def test_a_busy_push_leaves_the_report_to_the_caller():
+    errors: list[str] = []
+    sink = logger.add(lambda m: errors.append(m), level="ERROR")
+    board = BusyPushBoard()
+    try:
+        with pytest.raises(ApiError) as error:
+            commit.push_tolerant(board, None, "padvia")
+    finally:
+        logger.remove(sink)
+
+    assert error.value.code == ApiStatusCode.AS_BUSY
+    assert error.value.__context__ is None
+    assert not board.dropped
+    assert errors == []

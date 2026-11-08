@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from kipy.errors import ApiError
+from kipy.proto.common.envelope_pb2 import ApiStatusCode
 
 from kistitch import drc
 from kistitch.plan import Plan, PlannedUnit, Stub, UnfixableSpot
@@ -746,3 +747,10 @@ def test_connectivity_nets_rise_only_with_their_count():
 
     assert drc.rising_connectivity_nets([a], [moved, clearance]) == set()
     assert drc.rising_connectivity_nets([a], [a, moved, gnd]) == {"+3V3", "GND"}
+
+
+def test_a_busy_kicad_is_not_taken_for_one_without_the_call(no_system_cli):
+    busy = ApiError("busy", code=ApiStatusCode.AS_BUSY)
+
+    with pytest.raises(ApiError):
+        drc.locate_kicad_cli(None, FakeKiCad(error=busy))

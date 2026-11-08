@@ -23,13 +23,12 @@ from kipy.proto.common.commands.editor_commands_pb2 import (
     CreateItemsResponse,
     ItemStatusCode,
 )
-from kipy.proto.common.envelope_pb2 import ApiStatusCode
 from kipy.util.proto import pack_any
 from kipy.wrapper import Wrapper
 from loguru import logger
 
 from kistitch.plan import PlannedUnit
-from kistitch.snapshot import NM_PER_MM, Point2
+from kistitch.snapshot import NM_PER_MM, Point2, kicad_busy
 
 MARKER_LAYER = BoardLayer.BL_Eco2_User
 MARKER_HALF_SIZE = 0.5
@@ -238,7 +237,8 @@ def push_tolerant(board: kipy.board.Board, commit: Commit, label: str) -> bool:
 
     A lost or timed-out connection doesn't mean KiCad didn't land it, so that
     only warns. An ApiError is KiCad's answer, so nothing landed and the
-    commit is dropped.
+    commit is dropped. A busy KiCad refuses the drop as well, so a busy
+    refusal is only re-raised.
     """
     try:
         board.push_commit(commit, label)
@@ -250,6 +250,8 @@ def push_tolerant(board: kipy.board.Board, commit: Commit, label: str) -> bool:
         )
         return False
     except ApiError as e:
+        if kicad_busy(e):
+            raise
         logger.error(f"KiCad refused to commit '{label}': {e}")
         board.drop_commit(commit)
         raise
@@ -271,9 +273,7 @@ def refill_after_commit(kicad: kipy.KiCad, board: kipy.board.Board) -> None:
 
 
 def _busy(e: Exception) -> bool:
-    return isinstance(e, KiCadConnectionError) or (
-        isinstance(e, ApiError) and e.code == ApiStatusCode.AS_BUSY
-    )
+    return isinstance(e, KiCadConnectionError) or kicad_busy(e)
 
 
 def refill_tolerant(
@@ -306,7 +306,7 @@ def refill_tolerant(
             logger.warning(f"Zone refill request timed out ({e}); waiting for KiCad")
             break
         except ApiError as e:
-            if e.code != ApiStatusCode.AS_BUSY:
+            if not kicad_busy(e):
                 raise
             if not busy_logged:
                 logger.warning(
