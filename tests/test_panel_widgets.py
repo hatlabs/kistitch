@@ -12,7 +12,8 @@ import pytest
 if TYPE_CHECKING:
     from loguru import Message
 
-pytest.importorskip("PySide6.QtWidgets")
+# Skip only without PySide6; a PySide6 whose Qt libraries fail to load fails.
+pytest.importorskip("PySide6.QtWidgets", exc_type=ModuleNotFoundError)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from kipy.errors import ConnectionError as KiCadConnectionError
