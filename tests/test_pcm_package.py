@@ -97,6 +97,18 @@ def test_identifier_matches_the_plugin_and_its_metadata() -> None:
     assert plugin["identifier"] == metadata["identifier"] == pcm_package.IDENTIFIER
 
 
+def test_every_icon_the_plugin_names_is_in_the_plugin() -> None:
+    plugins = ROOT / "pcm" / "plugins"
+    plugin = _json((plugins / "plugin.json").read_bytes())
+    action = _only(plugin["actions"])
+    icons = [
+        *cast(list[str], action["icons-light"]),
+        *cast(list[str], action["icons-dark"]),
+    ]
+    assert icons
+    assert [icon for icon in icons if not (plugins / icon).is_file()] == []
+
+
 def test_packages_json_describes_the_archive(built: pcm_package.Built) -> None:
     packages = _json(built.packages.read_bytes())
     package = _only(packages["packages"])
