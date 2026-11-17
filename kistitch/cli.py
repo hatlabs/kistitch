@@ -379,6 +379,36 @@ def configure_logging() -> None:
     logger.add(sys.stderr, level=os.environ.get(LOG_LEVEL_VARIABLE, DEFAULT_LOG_LEVEL))
 
 
+GUI_EXTRA_MESSAGE = (
+    "The panel needs PySide6, which comes with the `gui` extra: "
+    "uv tool install 'kistitch[gui]'"
+)
+
+
+def parse_panel_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="kistitch-panel",
+        description="Open a window beside KiCad's PCB editor that runs "
+        "kistitch's steps on the open board: pad vias, power stitching, "
+        "return vias and ground stitching, with their heatmaps, and clears "
+        "markers, heatmaps and stitching vias. Needs the gui extra.",
+    )
+    return parser.parse_args(argv)
+
+
+def panel_main(argv: list[str] | None = None) -> None:
+    """The `kistitch-panel` command."""
+    parse_panel_args(argv)
+    configure_logging()
+    try:
+        from kistitch.panel.window import main as open_panel
+    except ImportError as e:
+        if not (e.name or "").startswith("PySide6"):
+            raise
+        raise SystemExit(f"{GUI_EXTRA_MESSAGE} ({e})") from None
+    open_panel()
+
+
 def main():
     configure_logging()
     args = parse_args()

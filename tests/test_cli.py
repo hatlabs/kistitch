@@ -2,6 +2,7 @@ import argparse
 import re
 import subprocess
 import sys
+from importlib import metadata
 
 import kipy
 import pytest
@@ -517,3 +518,36 @@ def test_refill_reaches_the_check_measurement(monkeypatch, argv, module, flags, 
         )
 
     assert seen == [refill]
+
+
+def run_panel_without(module: str) -> subprocess.CompletedProcess[str]:
+    """Run `kistitch-panel` with `module` failing to import."""
+    code = (
+        "import sys\n"
+        f"sys.modules[{module!r}] = None\n"
+        "from kistitch.cli import panel_main\n"
+        "panel_main([])\n"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+
+
+def test_panel_without_the_gui_extra_prints_the_install_hint():
+    ran = run_panel_without("PySide6")
+
+    assert ran.returncode != 0
+    assert "uv tool install 'kistitch[gui]'" in ran.stderr
+
+
+def test_panel_reports_another_import_error_as_it_is():
+    ran = run_panel_without("kistitch.panel.window")
+
+    assert ran.returncode != 0
+    assert "uv tool install" not in ran.stderr
+    assert "ModuleNotFoundError" in ran.stderr
+
+
+def test_panel_is_installed_as_kistitch_panel():
+    (script,) = metadata.entry_points(group="console_scripts", name="kistitch-panel")
+    assert script.value == "kistitch.cli:panel_main"
