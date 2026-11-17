@@ -1,3 +1,8 @@
+import dataclasses
+import os
+import sys
+import tempfile
+import time
 from datetime import datetime
 from itertools import pairwise
 
@@ -19,10 +24,12 @@ from loguru import logger
 from kistitch import commit, drc, placement
 from kistitch.commit import CommitOutcome, Marker, MarkerKind
 from kistitch.plan import Plan, PlannedUnit, Stub, UnfixableSpot
+from kistitch.progress import Cancelled, Stage
 from kistitch.returnpath import NoBoardOutlineError
 from kistitch.snapshot import NM_PER_MM, Snapshot, ViaSize
 
 VIA = ViaSize(0.6, 0.3)
+REAL_DRC_RUNNER = drc.DrcRunner
 BOARD_CHANGES = {
     "refill_zones",
     "begin_commit",
@@ -241,7 +248,7 @@ class FakeDrcRunner:
 
     base: tuple[drc.Violation, ...] = ()
 
-    def __init__(self, kicad_cli, project, board_text, workdir):
+    def __init__(self, kicad_cli, project, board_text, workdir, progress=None):
         self.bad = {(5, 5)}
         self.planned: list[drc.Violation] = []
 
@@ -456,7 +463,7 @@ def test_board_changed_after_an_unconfirmed_refill_names_the_refill(
 ):
     board, kicad = saved_board
     board.texts = ["(kicad_pcb)", "(kicad_pcb (refilled))"]
-    monkeypatch.setattr(placement, "refill_tolerant", lambda kicad, board: False)
+    monkeypatch.setattr(placement, "refill_tolerant", lambda kicad, board, **_: False)
 
     with pytest.raises(placement.BoardChangedError, match="zone refill"):
         placement.run_placement(
@@ -1237,6 +1244,48 @@ def test_refill_busy_until_the_deadline_is_not_success():
     assert board.refills == 4  # the first call plus one per poll
 
 
+def stop_after(calls):
+    """A stop check that raises Cancelled from its `calls`-th call on."""
+    seen = []
+
+    def check():
+        seen.append(None)
+        if len(seen) >= calls:
+            raise Cancelled()
+
+    return check
+
+
+def test_refill_stops_on_request_while_kicad_stays_busy():
+    board = RefillBoard(busy())
+    clock = FakeClock()
+
+    with pytest.raises(Cancelled):
+        commit.refill_tolerant(
+            FakeKiCad(None),
+            board,
+            timeout_s=3,
+            poll_s=1,
+            sleep=clock.sleep,
+            clock=clock,
+            check=stop_after(1),
+        )
+
+    assert board.refills == 1
+
+
+def test_refill_stops_on_request_while_waiting_for_the_fill():
+    kicad = FakeKiCad(None)
+    kicad.pings = [busy()] * 10
+
+    with pytest.raises(Cancelled):
+        commit.refill_tolerant(
+            kicad, RefillBoard(None), sleep=lambda s: None, check=stop_after(2)
+        )
+
+    assert len(kicad.pings) == 9  # one ping, then the stop
+
+
 @pytest.mark.parametrize("refilled", [True, False])
 def test_measure_only_refills_and_snapshots_with_an_empty_plan(
     monkeypatch, log, refilled
@@ -1246,7 +1295,7 @@ def test_measure_only_refills_and_snapshots_with_an_empty_plan(
     monkeypatch.setattr(
         placement,
         "refill_tolerant",
-        lambda k, b: refills.append((k, b)) or refilled,
+        lambda k, b, **_: refills.append((k, b)) or refilled,
     )
     monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda b: snap))
 
@@ -1384,7 +1433,7 @@ def test_measure_only_without_refills_uses_the_fills_as_they_are(monkeypatch, lo
     monkeypatch.setattr(
         placement,
         "refill_tolerant",
-        lambda k, b: pytest.fail("refilled with refills off"),
+        lambda k, b, **_: pytest.fail("refilled with refills off"),
     )
     monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda b: snap))
 
@@ -1411,3 +1460,264 @@ def test_commit_without_refill_only_commits(log):
     assert len(pushes(board)) == 1
     assert "refill_zones" not in board.calls
     assert not [line for line in log if "refill" in line.lower()]
+
+
+# ---- progress and cancellation ------------------------------------------------
+
+
+def stage_names(rec):
+    return [(s.value, c) for s, c in rec.stages()]
+
+
+def test_run_reports_its_stages_in_order(saved_board, recorder):
+    _, kicad = saved_board
+    rec = recorder()
+
+    placement.run_placement(
+        plan_at((1, 1), (5, 5)),
+        None,
+        placement.RunSettings("test"),
+        kicad,
+        progress=rec.progress,
+    )
+
+    assert stage_names(rec) == [
+        ("refill", None),
+        ("read", None),
+        ("plan", None),
+        ("drc", (1, drc.DEFAULT_MAX_ROUNDS)),
+        ("plan", None),
+        ("drc", (2, drc.DEFAULT_MAX_ROUNDS)),
+        ("commit", None),
+        ("refill", None),
+    ]
+
+
+def test_run_without_refills_reports_no_refill_stage(saved_board, recorder):
+    _, kicad = saved_board
+    rec = recorder()
+
+    placement.run_placement(
+        plan_at((1, 1)),
+        None,
+        placement.RunSettings("test", refill=False),
+        kicad,
+        progress=rec.progress,
+    )
+
+    assert [s for s, _ in stage_names(rec)] == ["read", "plan", "drc", "commit"]
+
+
+def test_stop_before_the_run_starts_cancels_before_the_refill(saved_board, recorder):
+    board, kicad = saved_board
+    rec = recorder()
+    rec.stopped = True
+
+    with pytest.raises(Cancelled):
+        placement.run_placement(
+            never_plan,
+            None,
+            placement.RunSettings("test"),
+            kicad,
+            progress=rec.progress,
+        )
+
+    assert board_changes(board) == []
+
+
+def test_stop_during_planning_cancels_without_a_commit(saved_board, recorder):
+    board, kicad = saved_board
+    rec = recorder()
+
+    def planner(snapshot, options, forbidden):
+        rec.stopped = True
+        return Plan(units=(unit(1, 1),))
+
+    with pytest.raises(Cancelled):
+        placement.run_placement(
+            planner, None, placement.RunSettings("test"), kicad, progress=rec.progress
+        )
+
+    assert "begin_commit" not in board.calls and not pushes(board)
+
+
+def test_stop_during_the_last_drc_round_cancels_without_a_commit(
+    saved_board, recorder, monkeypatch
+):
+    board, kicad = saved_board
+    rec = recorder()
+
+    class StoppingRunner(FakeDrcRunner):
+        def new_violations(self, plan):
+            rec.stopped = True
+            return super().new_violations(plan)
+
+    monkeypatch.setattr(drc, "DrcRunner", StoppingRunner)
+
+    with pytest.raises(Cancelled):
+        placement.run_placement(
+            plan_at((1, 1)),
+            None,
+            placement.RunSettings("test"),
+            kicad,
+            progress=rec.progress,
+        )
+
+    assert "begin_commit" not in board.calls and not pushes(board)
+
+
+def test_stop_after_the_board_changed_check_still_commits(saved_board, recorder):
+    board, kicad = saved_board
+    rec = recorder(board.calls, stop_at=Stage.COMMIT)
+
+    result = placement.run_placement(
+        plan_at((1, 1)),
+        None,
+        placement.RunSettings("test"),
+        kicad,
+        progress=rec.progress,
+    )
+
+    assert result.commit is CommitOutcome.LANDED
+    assert len(pushes(board)) == 1
+    # The refill after the commit runs too.
+    assert stage_names(rec)[-1] == ("refill", None)
+    assert board.calls[-1] == "refill_zones"
+
+
+def test_committing_is_reported_after_the_last_stop_check_and_before_the_commit(
+    saved_board, recorder
+):
+    board, kicad = saved_board
+    board.texts = ["(kicad_pcb)", "(kicad_pcb)"]
+    rec = recorder(board.calls)
+
+    placement.run_placement(
+        plan_at((1, 1)),
+        None,
+        placement.RunSettings("test"),
+        kicad,
+        progress=rec.progress,
+    )
+
+    committing = board.calls.index((Stage.COMMIT, None))
+    last_check = len(board.calls) - 1 - board.calls[::-1].index("check")
+    assert last_check == committing - 1
+    assert board.calls.index("begin_commit") > committing
+
+
+def test_measure_only_reports_refill_and_read(monkeypatch, recorder):
+    snap = Snapshot(copper_layers=("F.Cu",))
+    monkeypatch.setattr(placement, "refill_tolerant", lambda k, b, **_: True)
+    monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda b: snap))
+    rec = recorder()
+
+    placement.measure_only(object(), object(), progress=rec.progress)  # type: ignore[arg-type]
+
+    assert stage_names(rec) == [("refill", None), ("read", None)]
+
+
+def test_measure_only_without_refills_reports_only_read(monkeypatch, recorder):
+    monkeypatch.setattr(
+        Snapshot, "from_board", staticmethod(lambda b: Snapshot(copper_layers=()))
+    )
+    rec = recorder()
+
+    placement.measure_only(object(), object(), refill=False, progress=rec.progress)  # type: ignore[arg-type]
+
+    assert stage_names(rec) == [("read", None)]
+
+
+def test_measure_only_stopped_before_reading_cancels(monkeypatch, recorder):
+    monkeypatch.setattr(placement, "refill_tolerant", lambda k, b, **_: True)
+    monkeypatch.setattr(
+        Snapshot, "from_board", staticmethod(lambda b: pytest.fail("board read"))
+    )
+    rec = recorder(stop_at=Stage.REFILL)
+
+    with pytest.raises(Cancelled):
+        placement.measure_only(object(), object(), progress=rec.progress)  # type: ignore[arg-type]
+
+
+def refill_that_stops(refilled):
+    """A refill that asks the stop check once, then records that it finished."""
+
+    def refill(kicad, board, check):
+        check()
+        refilled.append(None)
+        return True
+
+    return refill
+
+
+def test_measure_only_stops_during_the_refill(monkeypatch, recorder):
+    refilled = []
+    monkeypatch.setattr(placement, "refill_tolerant", refill_that_stops(refilled))
+    rec = recorder(stop_at=Stage.REFILL)
+
+    with pytest.raises(Cancelled):
+        placement.measure_only(object(), object(), progress=rec.progress)  # type: ignore[arg-type]
+
+    assert refilled == []
+
+
+def test_placement_stops_during_the_refill_before_reading(
+    saved_board, monkeypatch, recorder
+):
+    _, kicad = saved_board
+    refilled = []
+    monkeypatch.setattr(placement, "refill_tolerant", refill_that_stops(refilled))
+    rec = recorder(stop_at=Stage.REFILL)
+
+    with pytest.raises(Cancelled):
+        placement.run_placement(
+            plan_at((1, 1)),
+            None,
+            placement.RunSettings("test"),
+            kicad,
+            progress=rec.progress,
+        )
+
+    assert refilled == []
+
+
+SLOW_DRC_CLI = """
+import os, pathlib, sys, time
+if sys.argv[1:] == ["version"]:
+    print("10.0.7")
+    sys.exit()
+pathlib.Path(os.environ["KISTITCH_TEST_PID"]).write_text(str(os.getpid()))
+time.sleep(60)
+"""
+
+
+def test_stop_during_drc_kills_kicad_cli_and_leaves_no_temp_files(
+    saved_board, recorder, monkeypatch, tmp_path
+):
+    board, kicad = saved_board
+    monkeypatch.setattr(drc, "DrcRunner", REAL_DRC_RUNNER)
+    cli = tmp_path / "kicad-cli"
+    cli.write_text(f"#!{sys.executable}\n{SLOW_DRC_CLI}")
+    pid_file = tmp_path / "pid"
+    monkeypatch.setenv("KISTITCH_TEST_PID", str(pid_file))
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    rec = recorder()
+    rec.progress = dataclasses.replace(rec.progress, stop=pid_file.exists)
+
+    started = time.monotonic()
+    with pytest.raises(Cancelled):
+        placement.run_placement(
+            plan_at((1, 1)),
+            None,
+            placement.RunSettings("test"),
+            kicad,
+            progress=rec.progress,
+        )
+
+    assert time.monotonic() - started < 10
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+    assert list(scratch.iterdir()) == []
+    assert "begin_commit" not in board.calls

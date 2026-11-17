@@ -23,6 +23,7 @@ from kistitch.commit import (
     refill_tolerant,
 )
 from kistitch.plan import Plan, Planner
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.snapshot import (
     NoBoardOutlineError,
     Snapshot,
@@ -77,14 +78,20 @@ class RunResult:
 
 
 def measure_only(
-    kicad: kipy.KiCad, board: kipy.board.Board, refill: bool = True
+    kicad: kipy.KiCad,
+    board: kipy.board.Board,
+    refill: bool = True,
+    progress: Progress = NO_PROGRESS,
 ) -> tuple[Snapshot, Plan]:
     """The board, refilled if `refill`, and an empty plan, for a run that
     places nothing."""
     if not refill:
         logger.info(REFILLS_OFF_MESSAGE)
-    elif not refill_tolerant(kicad, board):
-        logger.warning("Zone refill not confirmed; fills may be stale")
+    else:
+        progress.enter(Stage.REFILL)
+        if not refill_tolerant(kicad, board, check=progress.check):
+            logger.warning("Zone refill not confirmed; fills may be stale")
+    progress.enter(Stage.READ)
     return Snapshot.from_board(board), Plan()
 
 
@@ -150,13 +157,16 @@ def run_placement(
     options: OptionsT,
     settings: RunSettings,
     kicad: kipy.KiCad | None = None,
+    *,
+    progress: Progress = NO_PROGRESS,
 ) -> RunResult:
     """Run a planner against the open board.
 
     The board outline, kicad-cli and the project files are checked before
     anything touches the board. Unless `settings.refill` is off, zones are
     refilled before the snapshot even in a dry run, because stale fills would
-    drive the placement.
+    drive the placement. A stop is honoured up to the commit; the commit
+    and the refill after it then run to completion.
     """
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
@@ -173,14 +183,19 @@ def run_placement(
     unconfirmed_refill = False
     if not settings.refill:
         logger.info(REFILLS_OFF_MESSAGE)
-    elif not refill_tolerant(kicad, board):
-        unconfirmed_refill = True
-        logger.warning("Zone refill not confirmed; fills in the snapshot may be stale")
+    else:
+        progress.enter(Stage.REFILL)
+        if not refill_tolerant(kicad, board, check=progress.check):
+            unconfirmed_refill = True
+            logger.warning(
+                "Zone refill not confirmed; fills in the snapshot may be stale"
+            )
+    progress.enter(Stage.READ)
     snapshot = Snapshot.from_board(board)
 
     verified_text = board.get_as_string()
     with tempfile.TemporaryDirectory(prefix="kistitch-drc-") as tmp:
-        runner = drc.DrcRunner(kicad_cli, project, verified_text, Path(tmp))
+        runner = drc.DrcRunner(kicad_cli, project, verified_text, Path(tmp), progress)
         result = drc.prune(
             planner,
             snapshot,
@@ -188,6 +203,7 @@ def run_placement(
             runner.new_violations,
             max_rounds=settings.max_rounds,
             thermal_radius=settings.thermal_radius,
+            progress=progress,
         )
 
     log_summary(settings.command, result, settings.mark_unfixable)
@@ -213,6 +229,7 @@ def run_placement(
                 else ""
             )
         )
+    progress.enter(Stage.COMMIT)
     outcome = commit_units(
         kicad,
         board,
@@ -221,6 +238,7 @@ def run_placement(
         markers,
         stale,
         refill=settings.refill,
+        progress=progress,
     )
     return RunResult(snapshot, result, commit=outcome, splits=splits)
 

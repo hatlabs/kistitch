@@ -29,6 +29,7 @@ from kipy.wrapper import Wrapper
 from loguru import logger
 
 from kistitch.plan import PlannedUnit
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.snapshot import NM_PER_MM, Point2, kicad_busy
 
 MARKER_LAYER = BoardLayer.BL_Eco2_User
@@ -208,10 +209,11 @@ def commit_units(
     markers: Sequence[Marker],
     stale: Sequence[kipy.board_types.BoardShape] = (),
     refill: bool = True,
+    progress: Progress = NO_PROGRESS,
 ) -> CommitOutcome:
     """Remove the stale markers and create the units plus the new Eco2 markers
     as one commit, then refill the zones if `refill` and the commit is known
-    to have landed.
+    to have landed. Neither stops on request.
     """
     nets = {n.name: n for n in board.get_nets()}
     missing = sorted({u.net for u in units} - nets.keys())
@@ -248,6 +250,7 @@ def commit_units(
     if markers:
         show_layers(board, [MARKER_LAYER])
     if refill:
+        progress.report(Stage.REFILL, None)
         refill_after_commit(kicad, board)
     return CommitOutcome.LANDED
 
@@ -314,6 +317,10 @@ def _busy(e: Exception) -> bool:
     return isinstance(e, KiCadConnectionError) or kicad_busy(e)
 
 
+def _keep_waiting() -> None:
+    pass
+
+
 def refill_tolerant(
     kicad: kipy.KiCad,
     board: kipy.board.Board,
@@ -321,6 +328,7 @@ def refill_tolerant(
     poll_s: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    check: Callable[[], None] = _keep_waiting,
 ) -> bool:
     """Refill zones and wait, until `timeout_s` has passed, for KiCad to answer.
 
@@ -330,7 +338,8 @@ def refill_tolerant(
     timeout, so the deadline is wall-clock, not a poll count. A ping reply
     suggests, but doesn't prove, that the fill finished. AS_BUSY on the
     refill itself means KiCad refused to start it (a tool or dialog is
-    active), so it is retried.
+    active), so it is retried. `check` runs before every wait and may raise
+    to stop it.
     """
     if poll_s is None:
         poll_s = REFILL_POLL_S
@@ -355,10 +364,12 @@ def refill_tolerant(
             if clock() >= deadline:
                 logger.warning("KiCad stayed busy; zones were not refilled")
                 return False
+            check()
             sleep(poll_s)
 
     # Once KiCad has the refill, ask at least once whether it is done.
     while True:
+        check()
         sleep(poll_s)
         try:
             kicad.ping()
