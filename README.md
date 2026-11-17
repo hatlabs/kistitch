@@ -1,52 +1,39 @@
-# Kistitch: Via Stitching for KiCad Layouts
+# kistitch
 
-Formerly [breakneck](https://pypi.org/project/breakneck/). To switch an installed tool, run `uv tool uninstall breakneck && uv tool install --python 3.14 kistitch`. The neckdown command `cut` is gone; breakneck 0.4.x still has it.
-
-## Introduction
-
-Kistitch works on the board open in KiCad's PCB editor, through the KiCad IPC API. It has two jobs:
-
-- **Via placement.** `returnvia`, `padvia` and `pourstitch` place ground return vias, pad stitching vias and pour stitching vias. Every run is checked with KiCad's own DRC before anything is committed, and lands as one undoable step.
-- **Heatmaps.** `returnvia` and `pourstitch` show return distance and pour coverage as heatmaps, rendered to a file or placed on the board, for checking a layout and placing vias by hand.
-
-### Return vias
-
-A signal changing layers through a via also changes its reference plane, and its return current needs a ground via nearby to follow it. `returnvia` places a ground via within `--distance` (default 1.5 mm) of every via on a non-ground net that has none.
+kistitch places ground return vias, pad vias and pour stitching vias on the board open in KiCad's PCB editor, and shows heatmaps of where vias are missing. Every run is checked with KiCad's DRC before kistitch commits it to the board.
 
 | Before: `kistitch returnvia --check --overlay` | After: `kistitch returnvia --overlay` |
 |---|---|
 | ![Return distance heatmap on F.Cu before placing return vias, with many rings around unserved vias](https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/returnvia-before.png) | ![Return distance heatmap on F.Cu after placing return vias, with some rings left](https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/returnvia-after.png) |
 
-The return distance heatmap on F.Cu of a four-layer board, before and after placing return vias, following a `pourstitch --power` run. Each pink ring marks an unserved via end: one with no ground return within 1.5 mm through its reference plane. The rings left after the run mark the vias the planner couldn't serve; fix those by hand.
+The return distance heatmap on F.Cu of a four-layer board, before and after placing return vias. Each pink ring marks a via end with no ground return within 1.5 mm through its reference plane. The rings left after the run mark the vias the planner couldn't serve; those you fix by hand.
 
-**Reference planes.** A via end is a copper layer the via connects on: a same-net track, pad or fill touches it there. A via that connects on fewer than two layers carries no layer change and is exempt. Each end's reference plane is the nearest other copper layer in stack order with a ground zone outline at the via, the upper one of two equally near layers. Ends on the same plane are measured once.
+## Why
 
-**Metric.** The return distance on a plane is the distance from the via's centre to the nearest return's centre through that plane's ground fill: a straight hop across the via's own antipad, then through the fill. Returns are the ground net's vias and through-hole pads with fill within reach of them. A return of GND does not serve a via whose plane is GND_ISO. A via end is served when its distance is at most `--distance` plus a 0.1 mm margin for the 0.1 mm raster. Paths on the raster run in eight directions, which overstates a straight run by up to about 8 % between them, so the effective straight-line limit depends on direction: about 1.46–1.65 mm at the default distance.
+At high frequencies, the return current of a signal flows on the nearest reference plane, concentrated beneath the trace. A digital signal's bandwidth is about 0.35/t_r, so a 1 ns edge reaches 350 MHz whatever the clock rate: modern edge rates make every digital signal high frequency in this sense.
 
-The planner places vias by the same measure. For each via and ground net with unserved ends, it tries spots on rings around the via, nearest first, out to `--distance` plus the margin, and takes the first spot with full clearance that serves every one of those ends. A spot across a slot in a plane is rejected if the path around the slot is too long. A planned run therefore passes its own `--check`, except for the vias it reports as unfixable (including those left to a nearby forced via, which the log names), the vias it forced, and vias whose return DRC dropped at the round limit. The planner measures each ground net's plane as it was filled before the run. Every new via of one ground net cuts an antipad into the planes of the other ground nets, which can lengthen paths through them, so on a board with more than one ground net run `returnvia --check` after the run and the refill.
+A signal going through a via from L1 to L4 changes its reference plane from L2 to L3, and its return current has to cross between the two planes. A ground via next to the signal via gives it a short path. Without one, the return current takes a longer path between the planes, and the thick core between L2 and L3 of a typical four-layer board makes that loop larger still.
 
-Boards with isolated sections are supported: each end is measured against the ground net whose zone on its reference plane contains the via, so a via in a GND_ISO section gets a GND_ISO return, and a via whose ends reference GND and GND_ISO gets one of each. A via end outside every ground zone is reported, not served. So is an end whose plane has no ground fill within `--distance` of the via.
+<img src="https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/return-path.svg" alt="Cross-section of a four-layer board: a signal runs on L1, down a via to L4 and on along L4; its return current runs under it on L3, up a nearby ground via and back along L2">
 
-The ground nets are the nets with zones on two or more inner layers. A board with no such net, such as a two-layer board or a stackup with one inner ground plane, uses the net named GND. Without a GND net, `returnvia` stops before changing anything and asks for `--ground-nets`. A net named in `--ground-nets` that has no zones, vias or pads on the board, usually a typo, gets a warning. Vias on ground nets never need a return.
+Howard Johnson's ["Short-Term Impedance of Planes"](https://www.sigcon.com/Pubs/news/6_05.htm) covers the physics in more depth.
 
-**Stackup assumption.** The plane next to a signal layer is taken to be a ground pour. In a SIG-GND-PWR-SIG stackup, B.Cu's real reference is the power plane on In2. With no ground zone on In2, B.Cu ends are measured on In1 instead. A board-wide low-priority GND zone under the power plane on In2 makes In2 the reference, but leaves B.Cu ends with no ground fill there, so every B.Cu end fails.
+For good return paths, kistitch recommends a solid ground plane next to every signal layer. On four layers, that is SIG+PWR / GND / GND / SIG+PWR: power is routed as tracks on the outer layers, or poured as copper between the traces.
 
-### Pad stitching vias
+Both ground and power then need stitching to the same nets on the other layers:
 
-`padvia` gives every SMD pad with its own net's fill within reach on another copper layer a via and a short stub track into the net's plane or pour, unless the pad already reaches a same-net via or through-hole pad within 1 mm, copper edge to copper edge, through its tracks, pads or pour. Only fill the via fits in counts: a sliver narrower than the via, such as a strip of pour left under a same-net track, doesn't select the pad. The via goes on the side of the pad facing away from the footprint centre where there is room. The stub runs at multiples of 45°: one segment when the via lies straight or diagonally off the pad, otherwise a diagonal and a straight leg. `--nets GND +3.3V` limits it to those pads of the listed nets. Keep `--nets` when a net meant to join its plane at a single point, such as a star ground, has a zone under its pads; leave that net out of the list.
+- Ground stitching makes the two ground planes act as one reference.
+- With orthogonal routing, for example vertical on L1 and horizontal on L4, each outer-layer power pour breaks into fingers. Stitching ties the pours of the two layers into one mesh, which lowers the impedance between the loads and the bypass capacitors on either layer.
+- kistitch's automatic power stitching, which brings every point of a pour within 10 mm of a via, is a baseline. You usually add vias by hand where the heatmap shows gaps.
 
-### Pour stitching vias
+Stitching by hand is tedious, and areas with poor connectivity are hard to spot. kistitch places the vias, and its heatmaps show what is left.
 
-With Manhattan routing, outer-layer pours break up into narrow fingers. A regular grid of stitching vias misses many of them, and an unstitched finger connected at one end can act as an antenna.
+## What it does
 
-`pourstitch` makes every point of a net's pours lie within a distance D of a stitching via, measuring distance through the copper rather than in a straight line. A finger whose tip is 2 mm from a via across a gap, but 8 mm away along the copper, counts as 8 mm. Each run stitches one class of nets at one distance:
-
-- `pourstitch` stitches the ground nets at 3 mm. They are found the same way as for `returnvia` (see above), and `--ground-nets` overrides the detection the same way. Without a ground net, the run stops before changing anything and asks for `--ground-nets`.
-- `pourstitch --power` stitches every other net at 10 mm, power pours and pours of signal nets alike. On a board without a ground net, it logs that and stitches every net.
-
-`--distance D` replaces the class's distance for every net in the run. Only nets with pours on two or more copper layers are stitched; a net whose zones are all on one layer has nothing to stitch and is skipped. `--nets GND GND_ISO` limits the run to the listed nets of its class. A listed net of the other class is skipped with a warning, so `pourstitch --nets GND +3.3V` stitches only GND, and +3.3V needs a `--power` run. When every listed net is of the other class, as in `pourstitch --nets +3.3V`, the run stops with an error naming the flag to use; it commits nothing and leaves the markers in place. The log names the class, its distance and the nets it stitches.
-
-Power pours are stitched sparsely. They need vias to join their layers, to carry their DC current and to reach their extremities, and a 10 mm distance gives that. More power vias cost more than they give: each one cuts an antipad into the ground planes it passes through, and each one is a via on a non-ground net that needs its own ground return. Where a power pour carries high current, check that it has enough vias for it and add more by hand.
+- **Pad vias** give an SMD pad a via and a short stub track into its net's plane or pour on another layer. Only pads of nets with zones on two or more copper layers get one, and a pad that already reaches a same-net via or through-hole pad within 1 mm is skipped.
+- **Pour stitching** places vias so every point of a net's pours lies within a distance of a via, measured through the copper rather than in a straight line. Ground nets are stitched at 3 mm, power and other nets at 10 mm. Only nets with pours on two or more copper layers are stitched.
+- **Return vias** give every via on a non-ground net a ground via within 1.5 mm, through each reference plane it uses.
+- **Heatmaps** show return distance and pour coverage, placed on the board as reference images or written to a file, for checking a layout and placing vias by hand.
 
 | Before: `kistitch pourstitch --power --check --overlay` | After: `kistitch pourstitch --power --overlay` |
 |---|---|
@@ -54,184 +41,104 @@ Power pours are stitched sparsely. They need vias to join their layers, to carry
 
 Power pour coverage on F.Cu. Pink copper is more than 10 mm from a stitching via, measured through the copper.
 
-Ground pours are stitched densely, so that the ground layers act as one reference and no ground finger is left to act as an antenna. At 3 mm the lattice pitch is about 4.2 mm, which is λ/20 at about 1.7 GHz in FR-4. That is not dense enough for RF: around an RF section, such as the surroundings of a 2.4 GHz module and its antenna feed, add ground vias by hand.
-
 | Before: `kistitch pourstitch --check --overlay` | After: `kistitch pourstitch --overlay` |
 |---|---|
 | ![Ground plane coverage on In1.Cu before stitching, with pink gaps between vias](https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/ground-before.png) | ![Ground plane coverage on In1.Cu after placing stitching vias](https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/ground-after.png) |
 
-Ground plane coverage on In1.Cu, following the `pourstitch --power` and `returnvia` runs above. Pink copper is more than 3 mm from a stitching via. The pink left after the run, here next to the through-hole pads, is copper where no via fits within 3 mm through the copper; the run logs its total area but doesn't mark it.
+Ground plane coverage on In1.Cu, after power stitching and return vias. Pink copper is more than 3 mm from a stitching via. The pink left after the run, here next to the through-hole pads, is copper where no via fits.
 
-`pourstitch` rasterises the pours at 0.1 mm, places vias on a square lattice of pitch D·√2, then fills the remaining gaps one at a time, starting with the point farthest from any via. Narrow spots get a smaller fallback via. `--render` and `--overlay` show the result as heatmaps (see below).
+## Install
 
-## Installation
-
-Kistitch installs from KiCad's Plugin and Content Manager:
+kistitch installs from KiCad's Plugin and Content Manager:
 
 1. In the Plugin and Content Manager, open Manage repositories and add `https://github.com/hatlabs/kistitch/releases/download/pcm/repository.json`.
 2. Choose kistitch in the repository list at the top of the window; adding a repository does not show it. Install kistitch from the Plugins tab and apply the changes.
 3. Open a board in the PCB editor and press the kistitch button in the toolbar.
 
-Kistitch runs outside KiCad. The first press of the button offers to install [uv](https://docs.astral.sh/uv/) and kistitch with the panel, which needs an internet connection, and installs nothing until you agree. Later presses open [the panel](#the-panel), or bring it to the front.
+kistitch runs outside KiCad. The first press of the button offers to install [uv](https://docs.astral.sh/uv/) and kistitch with its panel, which needs an internet connection, and installs nothing until you agree. Later presses open the panel, or bring it to the front.
 
-Kistitch needs KiCad 10 and kicad-python 0.8 or later, with the KiCad API enabled (see [KiCad Configuration](#kicad-configuration)).
+kistitch needs KiCad 10 and kicad-python 0.8 or later.
 
 ### Without the plugin manager
 
-Kistitch is on PyPI. As a prerequisite, [install uv](https://docs.astral.sh/uv/getting-started/installation/). The commands below name Python 3.14: uv otherwise picks the newest Python, and one of kistitch's dependencies has no packages for 3.15 yet.
+kistitch is on PyPI. Name Python 3.14 when installing it: uv otherwise picks the newest Python, and one of kistitch's dependencies has no packages for 3.15 yet:
 
-To run kistitch without actually installing it:
-
-```
-uvx --python 3.14 kistitch <command> [options...]
-```
-
-To install kistitch as a tool:
-
-```
-uv tool install --python 3.14 kistitch
-```
-
-To install it with the panel (see [The panel](#the-panel)), which needs Qt:
-
-```
+```sh
 uv tool install --python 3.14 'kistitch[gui]'
 ```
 
-## KiCad Configuration
+Without the `gui` extra you get only the [command line](https://github.com/hatlabs/kistitch/blob/main/docs/cli.md).
 
-The new KiCad IPC API lets you connect to an existing KiCad instance using Inter-Process Communication (IPC). The API is not enabled by default. To enable it, open the KiCad preferences and navigate to "Plugins" and check the "Enable KiCad API" checkbox.
+### Before the first run
 
-Only one KiCad instance can serve the API at a time. Close other KiCad windows if kistitch can't find the open board.
+- **Enable the KiCad API** in Preferences > Plugins > Enable KiCad API. Only one KiCad instance can serve the API at a time, so close other KiCad windows if kistitch can't find the open board.
+- **Save rule and netclass changes** before a run. The DRC check reads the saved `.kicad_pro` and `.kicad_dru` from disk. The board itself is read from the editor, unsaved changes included.
+- **Set the zones' Remove islands to Never.** KiCad then keeps unconnected islands in the fill, and kistitch can place vias in them to connect them. Islands it can't stitch show as isolated copper in DRC.
 
-## Usage
+## Using it
 
-**NOTE:** If you are running kistitch with `uvx`, prepend all kistitch commands below with `uvx --python 3.14`.
+<img src="https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/panel.png" width="532" alt="The kistitch panel on the HALMET board, with GND and GND1 as ground nets, after a power stitching heatmap">
 
-Run `kistitch -h`, or `kistitch <command> -h`, to see the available options.
+The panel runs on the board open in the PCB editor. **Ground nets** starts with the detected ground nets: the nets with zones on two or more inner layers. Each step has **Place**, and all but the first have **Heatmap**, which places the step's heatmap on the board without placing vias. Run the steps in order:
 
-### Placing vias
+1. **Pad vias.** Place, then look at the circles on User.Eco2: each marks a pad where no via fits. Adjust those pads by hand.
+2. **Power stitching.** Place, then Heatmap. Add vias by hand at the ends of power pours that are still pink, and where a pour carries high current.
+3. **Return vias.** Place. It gives a return to every via on a non-ground net, the power stitching vias included. Fix the vias it circles by hand, then run Heatmap to confirm none is left.
+4. **Ground stitching.** Place. It counts the return vias as ground stitches, so it only fills the gaps they leave. Around an RF section, add ground vias by hand: 3 mm is not dense enough there (see [Pour stitching](https://github.com/hatlabs/kistitch/blob/main/docs/pour-stitching.md#why-power-is-sparse-and-ground-dense)).
 
-```bash
+Power stitching goes before return vias because its vias need returns, and ground stitching goes last because the return vias count towards it.
+
+Finish with Heatmap on Power stitching and on Return vias. Steps 3 and 4 place ground vias inside the outer-layer power pours, which can lengthen paths through power fingers. After later hand edits, run both checks again.
+
+**Clean up** has **Clear markers and heatmaps**, and **Remove vias…**, which counts the stitching vias on the chosen nets and asks before removing them.
+
+[The panel](https://github.com/hatlabs/kistitch/blob/main/docs/panel.md) describes each field, option and status line.
+
+## What a run changes
+
+- A run commits its vias as one undo step. With refills on, it then refills the zones as a second step, so undoing a placement takes two Ctrl+Z: one for the refill and one for the commit. With refills off, it takes one. A Heatmap run after the placement adds undo steps of its own, which come off first.
+- Markers for spots that need attention go on User.Eco2. Each Place, and each Heatmap, removes every shape on User.Eco2, hand-drawn ones included, before adding its own.
+- Before committing, kistitch runs KiCad's DRC on a copy of the board with the planned vias, and drops vias that cause new violations.
+- Other nets' pours are not obstacles, so a via can cut a narrow neck of another net's pour. The run commits anyway and marks each such cut with a square on User.Eco2 for fixing by hand.
+- Heatmaps go on User.1 to User.4 by default, one per copper layer, as reference images. Clear markers and heatmaps removes them. The panel always uses those four layers, so its Heatmap fails on a board with more than four copper layers; there, run `kistitch <command> --check --overlay --overlay-layers LAYER ...` with one user layer per copper layer, or `--check --render PATH`.
+
+**Remove vias, or `kistitch clear --vias`, removes every unlocked via that touches a pour of its own net and that no track or pad ties down, including vias you placed by hand.** To keep such a via, connect it with a short track or lock it.
+
+## Limits
+
+- Return vias assume that the plane next to each signal layer is ground. On a SIG-GND-PWR-SIG board, B.Cu's real reference is the power plane on In2. With no ground zone on In2, kistitch measures B.Cu via ends against the ground plane on In1 instead. See [Return vias](https://github.com/hatlabs/kistitch/blob/main/docs/return-vias.md).
+- The planners keep fixed clearances, such as 0.3 mm to other-net copper and 0.5 mm from the board edge, listed in [Markers and DRC](https://github.com/hatlabs/kistitch/blob/main/docs/markers-and-drc.md). They don't read custom design rules; only the DRC check enforces those.
+- Placed vias can't be grouped, because KiCad 10 doesn't create groups through its API.
+
+## How it works
+
+**Return vias.** For each end of a signal via, kistitch takes the nearest other copper layer with a ground zone at the via as its reference plane, and measures the distance through that plane's ground fill to the nearest ground via or through-hole pad. For a via beyond the limit, it tries spots on rings around it, nearest first, and takes the first with full clearance that serves every unserved end.
+
+**Pour stitching.** kistitch rasterises each net's pours at 0.1 mm, places vias on a square lattice, then fills the remaining gaps one at a time, farthest point first. A finger 2 mm from a via across a gap but 8 mm away along the copper counts as 8 mm. Narrow spots get a smaller fallback via.
+
+## Command line
+
+The panel's steps are commands of `kistitch`:
+
+```sh
 kistitch padvia
 kistitch pourstitch --power
 kistitch returnvia
-kistitch pourstitch --overlay
+kistitch pourstitch
 ```
 
-Each placement run:
+`--check --overlay` places a step's heatmap without placing vias, and `kistitch --dry-run <command>` plans and runs DRC without placing vias. A dry run still refills the zones and places its `--overlay` heatmap. [Command line](https://github.com/hatlabs/kistitch/blob/main/docs/cli.md) lists every option.
 
-1. Refills the zones, so the planner sees current fills (see [Zone refills](#zone-refills)).
-2. Plans the vias from a snapshot of the board.
-3. Checks the plan with `kicad-cli pcb drc` on a temporary copy of the board, against a DRC run on an unmodified copy. Vias implicated in new violations are dropped, and the planner tries again without those spots, for up to five rounds.
-4. Commits the remaining vias, their stubs and any markers as one undo step, replacing the markers of earlier runs, then refills the zones unless refills are off. If the board was edited in KiCad while the run was going, nothing is committed and the run has to be repeated.
+## Documentation
 
-Spots that need attention get markers on User.Eco2:
+- [Return vias](https://github.com/hatlabs/kistitch/blob/main/docs/return-vias.md)
+- [Pad vias](https://github.com/hatlabs/kistitch/blob/main/docs/pad-vias.md)
+- [Pour stitching](https://github.com/hatlabs/kistitch/blob/main/docs/pour-stitching.md)
+- [Heatmaps](https://github.com/hatlabs/kistitch/blob/main/docs/heatmaps.md)
+- [Markers and DRC](https://github.com/hatlabs/kistitch/blob/main/docs/markers-and-drc.md)
+- [Clearing vias](https://github.com/hatlabs/kistitch/blob/main/docs/clearing.md)
+- [The panel](https://github.com/hatlabs/kistitch/blob/main/docs/panel.md)
+- [Command line](https://github.com/hatlabs/kistitch/blob/main/docs/cli.md)
+- [Development](https://github.com/hatlabs/kistitch/blob/main/docs/development.md)
 
-- a circle, at least 0.7 mm across, where no via fits (`returnvia` and `padvia`), and after `returnvia --check --overlay` at each via with an unserved end; on a `padvia` pad it encloses the pad with a margin, so copper drawn in front can't hide it;
-- a square at a new DRC violation that couldn't be pinned on a single via.
-
-A run that places markers makes User.Eco2 visible if it was hidden, keeping the other visible layers; this is outside KiCad's undo history. A run that only removes markers, and `kistitch clear`, leave visibility alone.
-
-Other nets' pours are not obstacles, so a single via can cut a narrow neck of another net's pour. DRC reports that as unconnected items or isolated copper and names the pour's pads or zones, not the via. Kistitch counts these violations per net, in DRC of the board as it is and with the planned vias added. When a net's count goes up, the run logs the violations and commits anyway, with a square marker at each violation for fixing by hand. An existing violation that DRC reports at different items after the refill leaves the count unchanged, so it gets a marker too. `--no-allow-splits` (on `returnvia`, `padvia` and `pourstitch`) makes a run with new violations commit nothing and exit with an error naming the net and listing the violations; `--allow-splits` is the default. A dry run lists them without failing.
-
-`pourstitch` doesn't mark uncovered spots; its heatmap shows them as areas. Each placing `returnvia`, `padvia` or `pourstitch` run that doesn't stop with an error replaces the previous markers, whichever command made them: it removes every shape on User.Eco2, hand-drawn ones included, in the same undo step, also when it places nothing. So after `padvia` then `pourstitch`, only `pourstitch`'s markers remain. A `--check --overlay` run replaces them too, in the undo step that places the overlay images: `returnvia` draws a circle at each via with an unserved end, matching the heatmap's rings, and `pourstitch` only removes the old markers. A `--check --overlay` run with nothing to show, such as a `returnvia` check with every via end served, still removes the old markers. A `--check` run without `--overlay`, or one that can't place overlays, as in a dry run with the overlay layers disabled, leaves the markers alone, as does a dry run of a placing command. `kistitch clear` removes the markers without a run.
-
-`returnvia --force` adds a second pass: every via still without a return gets one at the spot with the most clearance, never overlapping other-net copper. These vias may violate clearance. They survive the DRC check despite that and get no marker: the run's log lists each forced via's net and position, and KiCad's DRC finds those that violate clearance so you can fix them by hand. A forced via is a placeholder that may lie outside the ground fill, so it serves nothing: the run's log and heatmaps still count its via as unserved. Other vias of the same ground net within `--distance` of it in a straight line get no forced via of their own; they are reported unfixable with "relies on forced via at (x, y)" and get a circle. After moving it, refill the zones and run `returnvia --check` to confirm. Via ends outside every ground zone, or with no ground fill near the via, are never forced.
-
-After `padvia`, stitch the pours in three steps, with checks by hand between them:
-
-1. `pourstitch --power`. Look at the result with `--check --render` or `--overlay`, and add vias by hand at the extremities of power pours that are still uncovered.
-2. `returnvia`. It gives every via on a non-ground net a return, the power stitching vias from step 1 included. Fix the vias it reports by hand, refill the zones and confirm with `returnvia --check`.
-3. `pourstitch`. It counts the return vias already on the board as ground stitches, so it adds ground vias only where they leave gaps.
-
-Finish with `pourstitch --power --check`, with `--render` or `--overlay`, and `returnvia --check`. The power check is repeated because steps 2 and 3 place GND vias inside the outer-layer power pours, which can lengthen paths through power fingers.
-
-Power stitching goes first because its vias need returns, and ground stitching goes last because the return vias count towards it. Every via placed punches a hole in other nets' pours and can create new narrow spots, so after later hand edits, repeat the `--check` runs.
-
-Notes:
-
-- **Via sizes** come from each net's netclass. `--via DIAMETER/DRILL` overrides them, and `pourstitch --fallback-via` (default 0.5/0.3) sets the smaller size for narrow spots.
-- **Which layers a via must join** is read from the net's zones. At each spot, a via must sit inside the net's fill on every copper layer where one of the net's zone outlines covers the spot, and there must be at least two such layers. A net with zones on only one layer can't be stitched and is skipped.
-- **Other nets' pours** are not obstacles. They refill around the new vias, as in any KiCad layout.
-- **Project rules are read from disk.** DRC uses the saved `.kicad_pro` and `.kicad_dru`, so save rule and netclass changes before running. The board itself is read from the editor, unsaved changes included.
-- **kicad-cli** is taken from `--kicad-cli`, then from the running KiCad, then from `PATH`, then from the standard install locations.
-- **Set the zones' "Remove islands" to Never** before running `pourstitch` or `returnvia`. KiCad then keeps unconnected islands in the fill, so kistitch can place vias in them, and a spot over the main pour on one layer with only an island on the other passes the two-layer rule instead of dropping out, and stops showing grey in the `pourstitch` heatmap. Islands kept this way appear as isolated copper in DRC until they are stitched. Stitching only lowers that count, so the split check doesn't block the run.
-- **Runs add vias.** Every check counts the vias already on the board, so repeating a run adds nothing new. To remove a run's vias, undo it, or run `kistitch clear --vias` (below) to remove every stitching via not tied to a track or pad. KiCad 10 doesn't allow creating groups through the API, so a run's vias can't be grouped for selecting later.
-
-### Clearing stitching vias
-
-`kistitch clear --vias` removes stitching vias along with the markers and overlays, so `pourstitch` and `returnvia` can place a fresh set after layout changes. A via goes when it touches a fill of its own net on at least one layer and no track or pad of its net touches it. Vias in pads, fanout vias at the end of a track and locked vias stay. `--nets NET [NET ...]` limits the removal to those nets; by default every net with a zone is cleared. Unless refills are off, it refills the zones before picking the vias, so the choice follows current fills, and again after the removal, which is one undo step. With `--dry-run` it still refills first, then logs how many vias per net would go and removes nothing.
-
-**This removes every via touching a pour of its own net that no track or pad ties down, including vias placed by hand.** That includes fanout vias tied to a pad only through a pour, and vias that are the only link between two pours of the same net. To keep such a via, connect it with a short track or lock it. To restore a board after clearing, run `clear --vias`, then `padvia` (it re-adds a via with a stub track for each SMD pad, and the stubs keep those vias through later clears), then the three stitching steps above: `pourstitch --power`, `returnvia` and `pourstitch`.
-
-### Zone refills
-
-By default kistitch refills the zones before measuring, placing or picking the vias for `clear --vias`, and after committing or clearing vias, so every run works from current fills and leaves the board filled. Each refill adds an undo step in KiCad, so undoing a placement takes one Ctrl+Z for the refill after the commit and one for the commit. `kistitch --no-refill <command>` turns all of these off: the run uses the zone fills as they are and logs that once, and refilling in KiCad (press B) before running kistitch is up to you. With stale fills, the planner and heatmaps see the old copper. DRC is unaffected: it refills its own copy of the board.
-
-### Dry runs
-
-`kistitch --dry-run <command>` plans, runs DRC, logs what it would place and writes `--render` output, but commits no vias or markers. The zone refill before planning still runs, unless refills are off, and `--overlay` still places its images, together with the markers of a `--check` run. The heatmaps include the planned vias: for `returnvia` they count as returns, except forced ones, so a dry run shows which via ends the run would leave unserved.
-
-### Heatmaps
-
-`pourstitch --render PATH` writes a figure with one panel per net and layer for the nets of the run's class, coloured by distance to the nearest stitching via, measured through the copper. Points beyond the run's distance, the class's default or `--distance`, are pink. Copper that no via could ever bring within that distance is grey: it is farther than that, through the net's copper on its layer, from every spot where a via could join the net's fill on two or more layers. Typical grey copper is a local zone on one layer whose other side is another net's pour, or the far end of such a zone joined to the main pour by a long neck. Other-net clearances are ignored for this, so a spot blocked only by other copper shows pink, not grey. Grey areas are left out of the uncovered area that `pourstitch` logs and are reported separately.
-
-`returnvia --render PATH` writes one panel per copper layer on which an unserved via end lies. By default each panel shows only the copper inside the rings around the unserved via ends, which picks out the problem vias. With nothing unserved, the figure is the board outline titled as such, and no overlay is placed. `--full-map` shows the copper of every layer on which a via changing layers connects: every net's tracks, pads and pours, ground pours included, since a via placed anywhere in it would need its own return, and the ground vias. Other vias show only on layers where they have a measured end. Each pixel is coloured by the distance through its reference plane to the nearest ground return. The reference plane is the nearest other copper layer in stack order with a ground zone outline at that pixel, the same rule a via end uses. A via end shows its own measured return distance over the via and over its net's copper in its antipad, the void around it in the reference plane, merged antipads included. Where antipads merge, the copper shows the worst of their distances. Another net's copper over the antipad stays purple: it has no return there. A signal through-hole pad shows the distance a via at its centre would have, over the pad and its clearance hole; pads are not reported unserved. Copper within the served threshold, `--distance` plus the 0.1 mm margin, is dark grey-blue, lightening towards the threshold. Beyond it the colour steps to yellow and runs through matplotlib's `plasma_r` to dark blue at 3 × the threshold, and stays there farther out. Purple copper has no path to a return: it lies over a slot or void in its reference plane. Copper with no ground outline on any other layer has no reference plane and is left blank, such as a two-layer board's ground side. A pink ring of radius `--distance` marks each unserved via end on its own layer. Identical layers share a panel.
-
-`returnvia` logs the number of exempt vias, which connect on fewer than two layers, and how many vias and via-plane returns are unserved. Set `LOGURU_LEVEL=DEBUG` to list each unserved via end with its distance or the reason it can't be served.
-
-`pourstitch --overlay` and `returnvia --overlay` place one transparent image per copper layer on the board as a reference image, scaled and positioned to line up with the copper. The images go on User.1–User.4, one per copper layer in stack order, or on the layers given with `--overlay-layers`. A run enables any of those layers that are disabled and logs which ones, and makes the layers that get an image visible, keeping the other visible layers; neither change is in KiCad's undo history. A dry run leaves them disabled. Each image carries its colourbar and label in a strip below the board outline. The board stores the images itself; the PNGs are written to a temporary directory and removed once placed. When they can't be placed, as in a dry run with the layers disabled, they stay there and the log lists their paths and placements. Toggle a layer's visibility to show or hide its heatmap, and remove them with `kistitch clear`. Both `clear` and a new `--overlay` replace only kistitch's own overlays, recognised by a `kistitch` text chunk in the PNG, or the `breakneck` chunk of overlays placed before the rename, also after the board outline has changed. Other reference images on those layers stay.
-
-`pourstitch --check` and `returnvia --check` measure the existing vias only: no planning, no DRC and no vias. Combine them with `--render` or `--overlay` to see the current coverage. Every `--overlay` run commits its images and so adds an undo step; with `--check`, that step also replaces the markers. For repeated checks while placing vias by hand, use `--check --render` and keep the PNG open in an image viewer that reloads it; use `--overlay` for a one-off look on the board:
-
-```bash
-kistitch returnvia --check --render returnvia.png
-kistitch pourstitch --power --check --render power.png
-kistitch pourstitch --check --overlay
-```
-
-### The panel
-
-`kistitch-panel` opens a window beside KiCad's PCB editor that runs the steps above on the open board, one action at a time, and keeps each step's latest result in view. The kistitch button in the PCB editor toolbar starts it (see [Installation](#installation)). Run from the command line, it needs the `gui` extra (see [Without the plugin manager](#without-the-plugin-manager)); without it, the command says how to install it.
-
-```bash
-kistitch-panel
-```
-
-From top to bottom:
-
-- **Ground nets** sets the ground nets of return vias and both stitching steps. It starts with the detected nets, found as for `returnvia`; choose others from the drop-down, and **Use detected** goes back.
-- **Refill zones automatically** is the panel's `--refill`/`--no-refill` (see [Zone refills](#zone-refills)) for every step and for Remove vias.
-- **1 Pad vias**: **Place** runs `padvia`. Adjust the pads by hand before going on.
-- **2 Power stitching**: **Heatmap** places the coverage heatmap, as `pourstitch --power --check --overlay`, and **Place** runs `pourstitch --power`.
-- **3 Return vias**: **Heatmap** shows the unserved vias, as `returnvia --check --overlay`; its menu adds **All copper**, as `--full-map`. **Place** runs `returnvia`.
-- **4 Ground stitching**: **Heatmap** and **Place**, as for power stitching, run `pourstitch` on the ground nets.
-- **Clean up**: **Clear markers and heatmaps** runs `clear`. **Remove vias…** counts the stitching vias on the chosen nets, asks with the count per net, then removes them as `clear --vias` does.
-- The activity area at the bottom shows what is running, with **Cancel (Esc)**, then how it ended. **Details** shows the action's log, which names where DRC dropped a via and where a via was forced, with **Copy**.
-
-The arrow beside a step opens its options, which are the command's: nets, distance, via size (empty for the netclass's), forced vias for return vias, and the fallback via under **More options**. **Restore defaults** resets them. Every placement allows pour splits and marks them, as the CLI does by default; the panel has no dry run.
-
-Under each step, its status line gives the step's latest Heatmap or Place in this session and how long ago, and notes when a later panel action replaced or cleared its markers or heatmap. The panel doesn't re-check a result: after editing the board, run the step again. Cancel stops an action before its commit; from the commit on, it runs to the end. A failed or cancelled action, or one KiCad was too busy for, leaves the status lines as they were. The panel reads the board when its window comes to the front and on **Retry**; when KiCad shows another board, the status lines are cleared.
-
-## Limitations
-
-- Placed vias can't be grouped, because KiCad 10 refuses to create groups through the API.
-- The planners use fixed clearances (0.3 mm to other-net copper; a pad's clearance override plus 0.1 mm where it has one) and don't evaluate custom design rules. The DRC check is what enforces those.
-
-## Development
-
-Development needs [uv](https://docs.astral.sh/uv/). The `run` script holds the development commands; `./run help` lists them.
-
-```
-./run sync                         # dependencies and the gui extra
-./run test                         # the tests; extra arguments go to pytest
-./run check                        # lint and the tests, as CI does
-./run pcm-package v<VERSION>+<N>   # the plugin's PCM files, into dist/pcm
-```
-
-Tests never need a running KiCad. The panel's widget tests run on Qt's offscreen platform and are skipped without the `gui` extra.
-
-### Releasing
-
-Every merge to main stages a release: a pre-release tagged `v<VERSION>+<N>_pre` and a draft `v<VERSION>+<N>`, where N counts the builds of that version. Publishing the draft on GitHub builds the wheel and the sdist and uploads them to PyPI as version `<VERSION>`. PyPI takes each version once, so a release of a version already there uploads nothing. Once its version is on PyPI, the release also publishes the KiCad Plugin and Content Manager files that `./run pcm-package` builds, unless the index already lists that version or a newer one: the plugin's zip, `packages.json` and the resources archive go on the release, and its `repository.json`, which points at them, replaces the previous one in the pre-release tagged `pcm`, which users add as `https://github.com/hatlabs/kistitch/releases/download/pcm/repository.json`. A rerun of a release whose plugin step failed publishes the plugin then. A change to the plugin ships only with a version bump. Bump the version with `./run bumpversion patch|minor|major` (needs `uv tool install bump2version`) before the release. It updates `VERSION`, `pyproject.toml`, `uv.lock` and the version the plugin's launcher requires.
+kistitch uses the KiCad IPC API through [kicad-python](https://pypi.org/project/kicad-python/).
