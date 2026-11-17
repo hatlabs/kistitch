@@ -153,9 +153,11 @@ def _add_heatmap_arguments(parser: argparse.ArgumentParser, check_help: str) -> 
 def _add_allow_splits_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--allow-splits",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Commit even when DRC finds new unconnected or isolated copper "
-        "that no via could be blamed for; the spots get markers",
+        "that no via could be blamed for, marking the spots (default); "
+        "--no-allow-splits refuses to commit instead",
     )
 
 

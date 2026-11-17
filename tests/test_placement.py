@@ -441,6 +441,9 @@ def test_board_changed_after_a_confirmed_refill_does_not_blame_it(saved_board):
     assert "refill" not in str(error.value)
 
 
+NO_SPLITS = placement.RunSettings("test", allow_splits=False)
+
+
 def split_runner(violation_type):
     """A DRC runner reporting a connectivity violation no planned via is named in."""
 
@@ -459,25 +462,30 @@ def split_runner(violation_type):
 
 
 @pytest.mark.parametrize("violation_type", ["unconnected_items", "isolated_copper"])
-def test_unattributed_split_refuses_to_commit(saved_board, monkeypatch, violation_type):
+def test_unattributed_split_refuses_to_commit_when_splits_are_not_allowed(
+    saved_board, monkeypatch, violation_type
+):
     monkeypatch.setattr(drc, "DrcRunner", split_runner(violation_type))
     board, kicad = saved_board
 
-    with pytest.raises(placement.SplitError, match="--allow-splits"):
-        placement.run_placement(
-            plan_at((1, 1)), None, placement.RunSettings("test"), kicad
-        )
+    with pytest.raises(placement.SplitError, match="without --no-allow-splits"):
+        placement.run_placement(plan_at((1, 1)), None, NO_SPLITS, kicad)
 
     assert "begin_commit" not in board.calls and board.created == []
 
 
-def test_allow_splits_commits_with_a_marker_at_the_split(saved_board, monkeypatch):
-    monkeypatch.setattr(drc, "DrcRunner", split_runner("unconnected_items"))
+@pytest.mark.parametrize("violation_type", ["unconnected_items", "isolated_copper"])
+def test_split_commits_with_a_marker_at_the_split_by_default(
+    saved_board, monkeypatch, log, violation_type
+):
+    monkeypatch.setattr(drc, "DrcRunner", split_runner(violation_type))
     board, kicad = saved_board
 
     result = placement.run_placement(
-        plan_at((1, 1)), None, placement.RunSettings("test", allow_splits=True), kicad
+        plan_at((1, 1)), None, placement.RunSettings("test"), kicad
     )
+
+    assert any("committing anyway" in line for line in log)
 
     assert len(pushes(board)) == 1
     _, marks = board.created
@@ -487,16 +495,33 @@ def test_allow_splits_commits_with_a_marker_at_the_split(saved_board, monkeypatc
     )
 
 
-def test_dry_run_reports_a_split_without_failing(saved_board, monkeypatch):
+@pytest.mark.parametrize(
+    "allow_splits, outcome, level",
+    [
+        (True, "would commit with markers", "WARNING"),
+        (False, "would refuse to commit", "ERROR"),
+    ],
+)
+def test_dry_run_reports_a_split_without_failing(
+    saved_board, monkeypatch, allow_splits, outcome, level
+):
     monkeypatch.setattr(drc, "DrcRunner", split_runner("unconnected_items"))
     board, kicad = saved_board
-
-    result = placement.run_placement(
-        plan_at((1, 1)), None, placement.RunSettings("test", dry_run=True), kicad
-    )
+    settings = placement.RunSettings("test", dry_run=True, allow_splits=allow_splits)
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(str(m)), format="{level.name} {message}")
+    try:
+        result = placement.run_placement(plan_at((1, 1)), None, settings, kicad)
+    finally:
+        logger.remove(sink)
 
     assert [v.type for v in result.prune.unattributed] == ["unconnected_items"]
     assert "begin_commit" not in board.calls
+    assert any(
+        line.startswith(f"{level} ") and f"a real run {outcome}" in line
+        for line in lines
+    )
+    assert any(line.startswith(f"{level}   connectivity:") for line in lines)
 
 
 def test_unattributed_non_connectivity_violation_still_commits(
@@ -505,7 +530,7 @@ def test_unattributed_non_connectivity_violation_still_commits(
     monkeypatch.setattr(drc, "DrcRunner", split_runner("copper_sliver"))
     board, kicad = saved_board
 
-    placement.run_placement(plan_at((1, 1)), None, placement.RunSettings("test"), kicad)
+    placement.run_placement(plan_at((1, 1)), None, NO_SPLITS, kicad)
 
     assert len(pushes(board)) == 1
 
@@ -520,6 +545,24 @@ def unconnected(*pads):
 
 
 BASE_UNCONNECTED = unconnected(("A", (1, 2)), ("B", (3, 4)))
+
+
+def test_non_connectivity_violation_on_a_split_net_is_not_counted(
+    saved_board, monkeypatch, log
+):
+    sliver = drc.Violation(
+        "copper_sliver",
+        "Copper sliver",
+        "warning",
+        (drc.ViolationItem("Zone [+3V3] on In1.Cu", (5, 6)),),
+    )
+    monkeypatch.setattr(drc, "DrcRunner", reporting([], [sliver, BASE_UNCONNECTED]))
+    _, kicad = saved_board
+
+    placement.run_placement(plan_at((1, 1)), None, placement.RunSettings("test"), kicad)
+
+    assert any("1 new connectivity violations on +3V3" in line for line in log)
+    assert not any("connectivity:" in line and "sliver" in line for line in log)
 
 
 def reporting(base, planned):
@@ -538,9 +581,7 @@ def test_existing_unconnected_item_that_moved_is_not_a_split(saved_board, monkey
     monkeypatch.setattr(drc, "DrcRunner", reporting([BASE_UNCONNECTED], [moved]))
     board, kicad = saved_board
 
-    result = placement.run_placement(
-        plan_at((1, 1)), None, placement.RunSettings("test"), kicad
-    )
+    result = placement.run_placement(plan_at((1, 1)), None, NO_SPLITS, kicad)
 
     assert result.prune.unattributed == (moved,)
     assert len(pushes(board)) == 1
@@ -557,9 +598,7 @@ def test_second_unconnected_item_on_the_same_net_is_a_split(saved_board, monkeyp
     board, kicad = saved_board
 
     with pytest.raises(placement.SplitError, match=r"\+3V3"):
-        placement.run_placement(
-            plan_at((1, 1)), None, placement.RunSettings("test"), kicad
-        )
+        placement.run_placement(plan_at((1, 1)), None, NO_SPLITS, kicad)
 
     assert "begin_commit" not in board.calls
 

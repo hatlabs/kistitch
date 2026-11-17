@@ -359,7 +359,7 @@ def execute(
     dry_run: bool = False,
     check: bool = False,
     kicad_cli: str | None = None,
-    allow_splits: bool = False,
+    allow_splits: bool = True,
     full_map: bool = False,
     kicad: kipy.KiCad | None = None,
 ) -> None:

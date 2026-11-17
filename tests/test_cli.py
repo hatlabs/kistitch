@@ -9,7 +9,14 @@ from kipy.errors import ApiError
 from kipy.proto.common.envelope_pb2 import ApiStatusCode
 from loguru import logger
 
-from kistitch import cli, overlay, placement, pourstitch_command, returnvia_command
+from kistitch import (
+    cli,
+    overlay,
+    placement,
+    pourstitch,
+    pourstitch_command,
+    returnvia_command,
+)
 from kistitch.cli import parse_via_size
 from kistitch.plan import (
     POURSTITCH_GROUND_DISTANCE,
@@ -18,7 +25,7 @@ from kistitch.plan import (
 )
 from kistitch.pourstitch import OtherClassNetsError
 from kistitch.returnpath import NoBoardOutlineError
-from kistitch.returnvia import NoGroundNetsError
+from kistitch.returnvia import NoGroundNetsError, ReturnViaOptions
 from kistitch.snapshot import ViaSize
 
 
@@ -32,6 +39,9 @@ def test_bad_via_size_is_rejected(text):
         parse_via_size(text)
 
 
+SPLIT_FLAGS = [([], True), (["--allow-splits"], True), (["--no-allow-splits"], False)]
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -40,11 +50,12 @@ def test_bad_via_size_is_rejected(text):
         ["pourstitch", "--nets", "GND"],
     ],
 )
-def test_placement_commands_take_allow_splits(monkeypatch, argv):
-    monkeypatch.setattr(sys, "argv", ["kistitch", *argv])
-    assert not cli.parse_args().allow_splits
-    monkeypatch.setattr(sys, "argv", ["kistitch", *argv, "--allow-splits"])
-    assert cli.parse_args().allow_splits
+@pytest.mark.parametrize("flag, allow", SPLIT_FLAGS)
+def test_placement_commands_allow_splits_unless_told_not_to(
+    monkeypatch, argv, flag, allow
+):
+    monkeypatch.setattr(sys, "argv", ["kistitch", *argv, *flag])
+    assert cli.parse_args().allow_splits is allow
 
 
 @pytest.mark.parametrize(
@@ -85,13 +96,12 @@ def test_cut_is_not_a_command(monkeypatch):
     assert exit_info.value.code == 2
 
 
-@pytest.mark.parametrize("allow", [False, True])
-def test_allow_splits_reaches_the_run_settings(monkeypatch, allow):
+@pytest.mark.parametrize("flag, allow", SPLIT_FLAGS)
+def test_allow_splits_reaches_the_run_settings(monkeypatch, flag, allow):
     seen: list[placement.RunSettings] = []
     monkeypatch.setattr(
         cli, "run_placement", lambda planner, options, settings: seen.append(settings)
     )
-    flag = ["--allow-splits"] if allow else []
 
     cli.execute_padvia(parsed(monkeypatch, ["padvia", "--nets", "GND", *flag]))
 
@@ -109,10 +119,36 @@ class Captured(Exception):
         (["returnvia"], returnvia_command),
     ],
 )
-@pytest.mark.parametrize("allow", [False, True])
+@pytest.mark.parametrize("flag, allow", SPLIT_FLAGS)
 def test_heatmap_command_allow_splits_reaches_the_run_settings(
-    monkeypatch, argv, module, allow
+    monkeypatch, argv, module, flag, allow
 ):
+    seen = capture_run_settings(monkeypatch, module)
+
+    with pytest.raises(Captured):
+        getattr(cli, f"execute_{argv[0]}")(parsed(monkeypatch, [*argv, *flag]))
+
+    assert [s.allow_splits for s in seen] == [allow]
+
+
+@pytest.mark.parametrize(
+    "module, options",
+    [
+        (pourstitch_command, pourstitch.Options()),
+        (returnvia_command, ReturnViaOptions()),
+    ],
+)
+def test_heatmap_command_allows_splits_by_default(monkeypatch, module, options):
+    seen = capture_run_settings(monkeypatch, module)
+
+    with pytest.raises(Captured):
+        module.execute(options, overlay.Outputs())
+
+    assert [s.allow_splits for s in seen] == [True]
+
+
+def capture_run_settings(monkeypatch, module) -> list[placement.RunSettings]:
+    """Record the settings `module` runs placement with, stopping the run there."""
     seen: list[placement.RunSettings] = []
 
     def capture(planner, options, settings, kicad):
@@ -126,12 +162,7 @@ def test_heatmap_command_allow_splits_reaches_the_run_settings(
         lambda: type("K", (), {"get_board": lambda self: None})(),
     )
     monkeypatch.setattr(module, "check_outline", lambda board: None)
-    flag = ["--allow-splits"] if allow else []
-
-    with pytest.raises(Captured):
-        getattr(cli, f"execute_{argv[0]}")(parsed(monkeypatch, [*argv, *flag]))
-
-    assert [s.allow_splits for s in seen] == [allow]
+    return seen
 
 
 def test_returnvia_takes_the_heatmap_options(monkeypatch, tmp_path):
