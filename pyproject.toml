@@ -32,6 +32,11 @@ Homepage = "https://github.com/hatlabs/kistitch"
 [project.scripts]
 kistitch = "kistitch.cli:main"
 
+[project.optional-dependencies]
+gui = [
+    "PySide6-Essentials>=6.12.0",
+]
+
 [dependency-groups]
 dev = [
     "ipykernel>=6.29.5",
