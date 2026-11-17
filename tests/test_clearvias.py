@@ -5,7 +5,7 @@ import pytest
 from kipy.errors import ConnectionError as KiCadConnectionError
 from shapely.geometry import LineString, box
 
-from kistitch import clear_command, clearvias, cli
+from kistitch import clear_command, clearvias, cli, commit
 from kistitch.clearvias import RemovableVias, stitching_vias
 from kistitch.commit import (
     REFILLS_OFF_MESSAGE,
@@ -433,9 +433,36 @@ def test_removal_removes_exactly_the_counted_vias(monkeypatch):
 
     cleared = clear_command.clear(kicad, board, DEFAULT_OVERLAY_LAYERS, found)  # type: ignore[arg-type]
 
-    assert cleared == clear_command.Cleared(vias=3, commit=CommitOutcome.LANDED)
+    assert cleared == clear_command.Cleared(
+        vias=3, commit=CommitOutcome.LANDED, refilled=True
+    )
     assert sorted(removed_ids(board)) == sorted(v.id for v in TWO_GND_ONE_POWER)
     assert board.calls[-1] == "refill_zones"
+
+
+def test_removal_reports_an_unconfirmed_refill(monkeypatch):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+    monkeypatch.setattr(commit, "refill_tolerant", lambda kicad, board: False)
+
+    cleared = clear_command.clear(kicad, board, DEFAULT_OVERLAY_LAYERS, found)  # type: ignore[arg-type]
+
+    assert cleared == clear_command.Cleared(vias=3, commit=CommitOutcome.LANDED)
+
+
+def test_removal_without_refills_reports_none(monkeypatch):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    found = clearvias.find_removable_vias(kicad, board, refill=False)  # type: ignore[arg-type]
+
+    cleared = clear_command.clear(
+        kicad,  # type: ignore[arg-type]
+        board,  # type: ignore[arg-type]
+        DEFAULT_OVERLAY_LAYERS,
+        found,
+        refill=False,
+    )
+
+    assert cleared == clear_command.Cleared(vias=3, commit=CommitOutcome.LANDED)
 
 
 def test_removal_limited_to_one_net_leaves_the_other_nets_vias(monkeypatch):
@@ -587,5 +614,7 @@ def test_removal_stopped_once_committing_still_removes_and_refills(
         progress=rec.progress,
     )
 
-    assert cleared == clear_command.Cleared(vias=3, commit=CommitOutcome.LANDED)
+    assert cleared == clear_command.Cleared(
+        vias=3, commit=CommitOutcome.LANDED, refilled=True
+    )
     assert board.calls[-1] == "refill_zones"

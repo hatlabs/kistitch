@@ -306,8 +306,9 @@ def push_tolerant(board: kipy.board.Board, commit: Commit, label: str) -> bool:
     return True
 
 
-def refill_after_commit(kicad: kipy.KiCad, board: kipy.board.Board) -> None:
-    """Refill zones; a failure only warns, since the commit has landed."""
+def refill_after_commit(kicad: kipy.KiCad, board: kipy.board.Board) -> bool:
+    """Refill zones; True once KiCad confirms it. A failure only warns,
+    since the commit has landed."""
     try:
         refilled = refill_tolerant(kicad, board)
     except (ApiError, KiCadConnectionError) as e:
@@ -315,6 +316,7 @@ def refill_after_commit(kicad: kipy.KiCad, board: kipy.board.Board) -> None:
         refilled = False
     if not refilled:
         logger.warning("Zone refill not confirmed; press B in KiCad to refill zones")
+    return refilled
 
 
 def _busy(e: Exception) -> bool:

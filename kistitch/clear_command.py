@@ -28,10 +28,12 @@ from kistitch.snapshot import Snapshot, outline_from_edge_paths, read_edge_paths
 
 @dataclass(frozen=True, kw_only=True)
 class Cleared:
-    """The vias known to have been removed, and how the commit went."""
+    """The vias known to have been removed, how the commit went, and
+    whether KiCad confirmed the refill after it."""
 
     vias: int
     commit: CommitOutcome
+    refilled: bool = False
 
 
 def clear(
@@ -72,11 +74,12 @@ def clear(
         if removed and refill:
             logger.warning(UNKNOWN_PUSH_REFILL_MESSAGE)
         return Cleared(vias=0, commit=CommitOutcome.UNKNOWN)
+    refilled = False
     if removed and refill:
         # Close the fills over the holes the removed vias leave.
         progress.report(Stage.REFILL, None)
-        refill_after_commit(kicad, board)
-    return Cleared(vias=len(removed), commit=CommitOutcome.LANDED)
+        refilled = refill_after_commit(kicad, board)
+    return Cleared(vias=len(removed), commit=CommitOutcome.LANDED, refilled=refilled)
 
 
 def _still_removable(
