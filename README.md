@@ -83,7 +83,7 @@ uv tool install kistitch
 To install it with the panel (see [The panel](#the-panel)), which needs Qt:
 
 ```
-uv tool install 'kistitch[gui]'
+uv tool install --python 3.14 'kistitch[gui]'
 ```
 
 Kistitch needs KiCad 10 and kicad-python 0.8 or later.

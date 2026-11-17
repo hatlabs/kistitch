@@ -539,7 +539,7 @@ def test_panel_without_the_gui_extra_prints_the_install_hint():
     # Distinct from a failure (1) and a usage error (2), so that the KiCad
     # plugin's launcher can offer to add the extra.
     assert ran.returncode == cli.GUI_EXTRA_EXIT == 3
-    assert "uv tool install 'kistitch[gui]'" in ran.stderr
+    assert "uv tool install --python 3.14 'kistitch[gui]'" in ran.stderr
 
 
 def test_panel_reports_another_import_error_as_it_is():

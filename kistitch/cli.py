@@ -383,7 +383,7 @@ def configure_logging() -> None:
 
 GUI_EXTRA_MESSAGE = (
     "The panel needs PySide6, which comes with the `gui` extra: "
-    "uv tool install 'kistitch[gui]'"
+    "uv tool install --python 3.14 'kistitch[gui]'"
 )
 GUI_EXTRA_EXIT = 3
 """`kistitch-panel`'s exit code without the `gui` extra, apart from a
