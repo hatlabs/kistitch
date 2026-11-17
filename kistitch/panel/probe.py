@@ -31,6 +31,10 @@ class NoBoardError(RuntimeError):
     """KiCad has no board open in its PCB editor."""
 
 
+class BoardSwitchedError(RuntimeError):
+    """KiCad shows another board than the one a run was started for."""
+
+
 @dataclass(frozen=True)
 class BoardId:
     identity: str
