@@ -20,6 +20,7 @@ from kistitch.commit import (
 from kistitch.placement import RunResult, RunSettings
 from kistitch.plan import POURSTITCH_POWER_DISTANCE, StitchClass
 from kistitch.pourstitch import NetCoverage, Options
+from kistitch.progress import Cancelled, Stage
 from kistitch.snapshot import NM_PER_MM, NoBoardOutlineError, Snapshot, ViaSize, Zone
 
 LAYERS = ("F.Cu", "B.Cu")
@@ -110,7 +111,7 @@ def fakes(monkeypatch):
     created: list = []
     placements: list[RunSettings] = []
 
-    def fake_run(planner, options, settings, kicad):
+    def fake_run(planner, options, settings, kicad, *, progress):
         placements.append(settings)
         planned = Snapshot.from_board(kicad.get_board())
         plan = planner(planned, options, [])
@@ -380,7 +381,9 @@ def test_overlays_after_a_lost_placement_push_are_written_not_placed(
     monkeypatch.setattr(
         pourstitch_command,
         "run_placement",
-        lambda *args: dataclasses.replace(landed(*args), commit=CommitOutcome.UNKNOWN),
+        lambda *args, progress: dataclasses.replace(
+            landed(*args, progress=progress), commit=CommitOutcome.UNKNOWN
+        ),
     )
     board = Board()
 
@@ -666,3 +669,223 @@ def test_render_without_maps_replaces_the_previous_heatmap(
     )
 
     assert path.read_bytes().startswith(b"\x89PNG")
+
+
+# ---- progress and cancellation ------------------------------------------------
+
+
+def test_heatmap_reports_its_stages_in_order(fakes, png_dir, recorder):
+    rec = recorder()
+
+    pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert [s for s, _ in rec.stages()] == [
+        Stage.REFILL,
+        Stage.READ,
+        Stage.MEASURE,
+        Stage.DRAW,
+        Stage.COMMIT,
+    ]
+
+
+def test_heatmap_stopped_before_the_overlay_commit_places_nothing(
+    fakes, png_dir, recorder
+):
+    created, _ = fakes
+    board = Board()
+    rec = recorder(stop_at=Stage.DRAW)
+
+    with pytest.raises(Cancelled):
+        pourstitch_command.execute(
+            OPTIONS,
+            overlay.Outputs(overlay=True),
+            check=True,
+            kicad=KiCad(board),  # type: ignore[arg-type]
+            progress=rec.progress,
+        )
+
+    assert board.calls == ["refill_zones"]
+    assert created == []
+    assert not png_dir.exists()
+
+
+def test_heatmap_stopped_once_committing_still_places_the_overlays(
+    fakes, png_dir, recorder
+):
+    created, _ = fakes
+    board = Board()
+    rec = recorder(board.calls, stop_at=Stage.COMMIT)
+
+    result = pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert result.placement is None
+    assert len(created) == len(LAYERS)
+    committing = board.calls.index((Stage.COMMIT, None))
+    assert board.calls[committing - 1] == "check"
+    assert board.calls[committing + 1 :] == [
+        "begin_commit",
+        ("push_commit", pourstitch_command.OVERLAY_COMMIT),
+    ]
+
+
+def previous_overlays_board(created) -> ImagesBoard:
+    """A board holding the overlays of an earlier check run."""
+    pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+    )
+    return ImagesBoard(list(created))
+
+
+def test_heatmap_without_maps_removes_the_previous_overlays_as_its_commit(
+    fakes, recorder
+):
+    created, _ = fakes
+    board = previous_overlays_board(created)
+    rec = recorder(board.calls)
+
+    pourstitch_command.execute(
+        Options(nets=("+3.3V",)),
+        overlay.Outputs(overlay=True),
+        check=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    committing = board.calls.index((Stage.COMMIT, None))
+    assert board.calls[committing - 1] == "check"
+    assert board.calls[committing + 1 :] == [
+        "begin_commit",
+        "remove_items",
+        ("push_commit", pourstitch_command.OVERLAY_COMMIT),
+    ]
+
+
+def test_heatmap_without_maps_stopped_before_its_commit_keeps_the_overlays(
+    fakes, recorder
+):
+    created, _ = fakes
+    board = previous_overlays_board(created)
+    rec = recorder(board.calls, stop_at=Stage.DRAW)
+
+    with pytest.raises(Cancelled):
+        pourstitch_command.execute(
+            Options(nets=("+3.3V",)),
+            overlay.Outputs(overlay=True),
+            check=True,
+            kicad=KiCad(board),  # type: ignore[arg-type]
+            progress=rec.progress,
+        )
+
+    assert "begin_commit" not in board.calls
+
+
+def test_heatmap_without_outputs_reports_no_draw_stage(fakes, recorder):
+    rec = recorder()
+
+    pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(),
+        check=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert [s for s, _ in rec.stages()] == [Stage.REFILL, Stage.READ, Stage.MEASURE]
+
+
+def test_place_runs_its_planner_and_placement_with_the_progress(
+    fakes, recorder, monkeypatch
+):
+    rec = recorder()
+    seen = []
+    fake_run = pourstitch_command.run_placement
+
+    def spy(*args, progress):
+        seen.append(progress)
+        return fake_run(*args, progress=progress)
+
+    monkeypatch.setattr(pourstitch_command, "run_placement", spy)
+
+    pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(),
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert seen == [rec.progress]
+    assert (Stage.PLAN, (1, 1)) in rec.stages()
+
+
+def test_place_that_committed_nothing_stops_before_measuring(
+    fakes, png_dir, recorder, monkeypatch
+):
+    created, _ = fakes
+    fake_run = pourstitch_command.run_placement
+
+    def committing_nothing(*args, progress):
+        result = fake_run(*args, progress=progress)
+        return dataclasses.replace(result, commit=CommitOutcome.NOTHING)
+
+    monkeypatch.setattr(pourstitch_command, "run_placement", committing_nothing)
+    rec = recorder(stop_at=Stage.PLAN)
+
+    with pytest.raises(Cancelled):
+        pourstitch_command.execute(
+            OPTIONS,
+            overlay.Outputs(overlay=True),
+            kicad=KiCad(Board()),  # type: ignore[arg-type]
+            progress=rec.progress,
+        )
+
+    assert Stage.MEASURE not in [s for s, _ in rec.stages()]
+    assert created == []
+
+
+@pytest.mark.parametrize(
+    ("outcome", "overlaid"),
+    [(CommitOutcome.LANDED, True), (CommitOutcome.UNKNOWN, False)],
+)
+def test_place_stopped_after_its_commit_still_measures_and_overlays(
+    fakes, png_dir, recorder, monkeypatch, outcome, overlaid
+):
+    created, _ = fakes
+    fake_run = pourstitch_command.run_placement
+
+    def ending_with(*args, progress):
+        result = fake_run(*args, progress=progress)
+        return dataclasses.replace(result, commit=outcome)
+
+    monkeypatch.setattr(pourstitch_command, "run_placement", ending_with)
+    rec = recorder(stop_at=Stage.PLAN)
+
+    result = pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert rec.stopped
+    assert result.coverage
+    assert len(created) == (len(LAYERS) if overlaid else 0)
+    # A lost push skips the overlay commit, so no commit stage follows.
+    stages = [s for s, _ in rec.stages()]
+    assert stages[stages.index(Stage.MEASURE) :] == [Stage.MEASURE, Stage.DRAW] + (
+        [Stage.COMMIT] if overlaid else []
+    )

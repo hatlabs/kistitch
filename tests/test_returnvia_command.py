@@ -27,6 +27,7 @@ from kistitch.commit import (
 from kistitch.placement import RunResult
 from kistitch.plan import QUANTISATION, Plan, PlannedUnit, UnfixableSpot
 from kistitch.pourstitch import Options
+from kistitch.progress import Cancelled, Stage
 from kistitch.raster import CoverageMap, Grid
 from kistitch.returnpath import (
     NoBoardOutlineError,
@@ -195,7 +196,7 @@ class Fakes:
 def fakes(monkeypatch):
     f = Fakes()
 
-    def fake_run(planner, options, settings, kicad):
+    def fake_run(planner, options, settings, kicad, *, progress):
         f.planned.append(settings)
         plan = f.plan or planner(f.snap, options, [])
         return RunResult(
@@ -841,7 +842,9 @@ def test_overlays_after_a_lost_placement_push_are_written_not_placed(
     monkeypatch.setattr(
         returnvia_command,
         "run_placement",
-        lambda *args: dataclasses.replace(landed(*args), commit=CommitOutcome.UNKNOWN),
+        lambda *args, progress: dataclasses.replace(
+            landed(*args, progress=progress), commit=CommitOutcome.UNKNOWN
+        ),
     )
     fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
     board = Board()
@@ -1403,3 +1406,150 @@ def test_unserved_markers_put_one_circle_at_each_via_with_an_unserved_end():
         Marker(both_unserved, MarkerKind.UNFIXABLE, extent=0.4),
         Marker(one_unserved, MarkerKind.UNFIXABLE, extent=0.3),
     )
+
+
+# ---- progress and cancellation ------------------------------------------------
+
+
+def test_heatmap_reports_its_stages_in_order(fakes, png_dir, recorder):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+    rec = recorder()
+
+    returnvia_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        full_map=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert [s for s, _ in rec.stages()] == [
+        Stage.REFILL,
+        Stage.READ,
+        Stage.MEASURE,
+        Stage.DRAW,
+        Stage.COMMIT,
+    ]
+
+
+def test_heatmap_without_outputs_reports_no_draw_stage(fakes, recorder):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+    rec = recorder()
+
+    returnvia_command.execute(
+        OPTIONS,
+        overlay.Outputs(),
+        check=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert [s for s, _ in rec.stages()] == [Stage.REFILL, Stage.READ, Stage.MEASURE]
+
+
+def test_heatmap_stopped_before_the_overlay_commit_places_nothing(
+    fakes, png_dir, recorder
+):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+    board = Board()
+    rec = recorder(stop_at=Stage.DRAW)
+
+    with pytest.raises(Cancelled):
+        returnvia_command.execute(
+            OPTIONS,
+            overlay.Outputs(overlay=True),
+            check=True,
+            full_map=True,
+            kicad=KiCad(board),  # type: ignore[arg-type]
+            progress=rec.progress,
+        )
+
+    assert board.calls == ["refill_zones"]
+    assert fakes.created == []
+    assert not png_dir.exists()
+
+
+def test_heatmap_stopped_once_committing_still_places_the_overlays(
+    fakes, png_dir, recorder
+):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+    board = Board()
+    rec = recorder(stop_at=Stage.COMMIT)
+
+    result = returnvia_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        full_map=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert result.placement is None
+    assert fakes.created
+    assert ("push_commit", returnvia_command.OVERLAY_COMMIT) in board.calls
+
+
+def stopping_run(rec, snap, outcome):
+    """A placement asked to stop while it ran, ending with `outcome`."""
+
+    def run(planner, options, settings, kicad, *, progress):
+        assert progress is rec.progress
+        rec.stopped = True
+        return RunResult(snap, drc.PruneResult(Plan(), (), (), (), 1), commit=outcome)
+
+    return run
+
+
+@pytest.mark.parametrize(
+    ("outcome", "overlaid"),
+    [(CommitOutcome.LANDED, True), (CommitOutcome.UNKNOWN, False)],
+)
+def test_place_stopped_after_its_commit_still_measures_and_overlays(
+    fakes, png_dir, recorder, monkeypatch, outcome, overlaid
+):
+    rec = recorder()
+    monkeypatch.setattr(
+        returnvia_command,
+        "run_placement",
+        stopping_run(rec, fakes.snap, outcome),
+    )
+
+    result = returnvia_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        full_map=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert result.placement is not None
+    assert bool(fakes.created) == overlaid
+    # A lost push skips the overlay commit, so no commit stage follows.
+    assert [s for s, _ in rec.stages()] == [Stage.MEASURE, Stage.DRAW] + (
+        [Stage.COMMIT] if overlaid else []
+    )
+
+
+def test_place_that_committed_nothing_stops_before_measuring(
+    fakes, png_dir, recorder, monkeypatch
+):
+    rec = recorder()
+    monkeypatch.setattr(
+        returnvia_command,
+        "run_placement",
+        stopping_run(rec, fakes.snap, CommitOutcome.NOTHING),
+    )
+
+    with pytest.raises(Cancelled):
+        returnvia_command.execute(
+            OPTIONS,
+            overlay.Outputs(overlay=True),
+            full_map=True,
+            kicad=KiCad(Board()),  # type: ignore[arg-type]
+            progress=rec.progress,
+        )
+
+    assert rec.stages() == []
+    assert fakes.created == []

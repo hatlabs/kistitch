@@ -38,6 +38,7 @@ from kistitch.commit import (
     show_layers,
 )
 from kistitch.plan import POURSTITCH_PIXEL, raster_size
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.snapshot import NM_PER_MM, Point2, Snapshot
 
 DEFAULT_OVERLAY_LAYERS = ("User.1", "User.2", "User.3", "User.4")
@@ -346,12 +347,14 @@ def show_overlays(
     place: bool,
     commit_label: str,
     markers: Sequence[Marker] | None = None,
+    progress: Progress = NO_PROGRESS,
 ) -> bool:
     """Write the per-copper-layer PNGs and place them as this run's overlay
     set, or log where they would go; True once the images are on the board.
     `write_pngs` None means no images: the previous set is only removed.
     `markers`, unless None, replace the marker layer's shapes in the overlay
-    commit, so they change only if it lands.
+    commit, so they change only if it lands. The overlay commit is entered
+    as `progress`'s commit stage.
 
     The board embeds the image data, so the PNGs go to a temporary directory
     that is removed once they are placed. When they are not, they stay there
@@ -363,6 +366,7 @@ def show_overlays(
     placement = board_placement(bounds)
     if write_pngs is None:
         if place:
+            progress.enter(Stage.COMMIT)
             place_overlays(
                 board, [], placement, outputs.overlay_layers, commit_label, markers
             )
@@ -381,6 +385,8 @@ def show_overlays(
             )
             for L, path in pngs.items()
         ]
+        if place:
+            progress.enter(Stage.COMMIT)
         placed = place and place_overlays(
             board, images, placement, outputs.overlay_layers, commit_label, markers
         )

@@ -156,7 +156,7 @@ def capture_run_settings(monkeypatch, module) -> list[placement.RunSettings]:
     """Record the settings `module` runs placement with, stopping the run there."""
     seen: list[placement.RunSettings] = []
 
-    def capture(planner, options, settings, kicad):
+    def capture(planner, options, settings, kicad, *, progress):
         seen.append(settings)
         raise Captured
 
@@ -486,7 +486,7 @@ def test_refill_reaches_the_heatmap_command_run_settings(
 ):
     seen: list[placement.RunSettings] = []
 
-    def capture(planner, options, settings, kicad):
+    def capture(planner, options, settings, kicad, *, progress):
         seen.append(settings)
         raise Captured
 
@@ -504,7 +504,7 @@ def test_refill_reaches_the_heatmap_command_run_settings(
 def test_refill_reaches_the_check_measurement(monkeypatch, argv, module, flags, refill):
     seen: list[bool] = []
 
-    def capture(kicad, board, refill=True):
+    def capture(kicad, board, refill, progress):
         seen.append(refill)
         raise Captured
 

@@ -24,6 +24,7 @@ from kistitch.placement import (
     run_placement,
 )
 from kistitch.plan import QUANTISATION, PlannedUnit
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.raster import BoolMap, CoverageMap, Grid
 from kistitch.returnpath import (
     Outcome,
@@ -387,6 +388,7 @@ def execute(
     full_map: bool = False,
     refill: bool = True,
     kicad: kipy.KiCad | None = None,
+    progress: Progress = NO_PROGRESS,
 ) -> ReturnResult:
     """Run returnvia against the open board.
 
@@ -395,17 +397,18 @@ def execute(
     unserved via in the overlay commit. Planned vias count as returns in
     the measurement, except forced ones. The heatmaps show only the copper
     around unserved via ends, or with `full_map` all copper. Overlays are
-    placed in their own commit, also in a dry run.
+    placed in their own commit, also in a dry run. A run stops on request
+    up to its overlay commit, or up to its via commit once it attempts one.
     """
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
     check_outline(board)
     layers = overlay.prepare_overlay_layers(board, outputs, dry_run)
 
-    planner = ReturnViaPlanner()
+    planner = ReturnViaPlanner(progress)
     result: RunResult | None = None
     if check:
-        snapshot, plan = measure_only(kicad, board, refill)
+        snapshot, plan = measure_only(kicad, board, refill, progress)
     else:
         result = run_placement(
             planner,
@@ -418,9 +421,15 @@ def execute(
                 refill=refill,
             ),
             kicad,
+            progress=progress,
         )
         snapshot, plan = result.snapshot, result.prune.plan
 
+    # A placement that attempted its commit is past its last stop point;
+    # one that committed nothing still stops before measuring.
+    committed = result is not None and result.commit is not CommitOutcome.NOTHING
+    after = progress.without_stop() if committed else progress
+    after.enter(Stage.MEASURE)
     grounds = planner.grounds(snapshot, options)
     fields = ReturnFields(with_returns(snapshot, plan.units))
     references = via_references(fields.snapshot, grounds)
@@ -443,6 +452,8 @@ def execute(
         maps = ring_maps(maps, marks, fields.grid)
         if not maps:
             logger.info("No unserved via ends: no heatmaps")
+    if outputs.render is not None or outputs.overlay:
+        after.enter(Stage.DRAW)
     if outputs.render is not None:
         if maps:
             render.render_panels(
@@ -487,6 +498,7 @@ def execute(
             place,
             OVERLAY_COMMIT,
             unserved_markers(results, snapshot.vias) if check else None,
+            after,
         )
     return ReturnResult(
         distance=options.distance,
