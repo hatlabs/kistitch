@@ -375,7 +375,9 @@ def execute(
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
     check_outline(board)
-    place_overlay = outputs.overlay and overlay.overlay_ready(board, outputs, dry_run)
+    place_overlay = outputs.overlay and overlay.prepare_overlay_layers(
+        board, outputs, dry_run
+    )
 
     planner = ReturnViaPlanner()
     if check:

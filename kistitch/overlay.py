@@ -143,7 +143,9 @@ class OverlayLayersError(RuntimeError):
     pass
 
 
-def overlay_ready(board: kipy.board.Board, outputs: Outputs, dry_run: bool) -> bool:
+def prepare_overlay_layers(
+    board: kipy.board.Board, outputs: Outputs, dry_run: bool
+) -> bool:
     """Whether overlays can go on the board, enabling missing overlay layers
     unless `dry_run`.
 

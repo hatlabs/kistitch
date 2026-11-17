@@ -873,11 +873,15 @@ class LayersBoard:
         return list(self.enabled)
 
 
-def test_overlay_ready_enables_missing_layers_keeping_every_enabled_one(log):
+def test_prepare_overlay_layers_enables_missing_layers_keeping_every_enabled_one(log):
     kept = (BL.BL_F_SilkS, BL.BL_Edge_Cuts, BL.BL_User_2)
     board = LayersBoard(enabled=kept)
 
-    ready = overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=False)  # type: ignore[arg-type]
+    ready = overlay.prepare_overlay_layers(
+        board,  # type: ignore[arg-type]
+        overlay.Outputs(overlay=True),
+        dry_run=False,
+    )
 
     assert ready
     [(count, layers)] = board.set_calls
@@ -890,47 +894,61 @@ def test_overlay_ready_enables_missing_layers_keeping_every_enabled_one(log):
     assert "undo" in line
 
 
-def test_overlay_ready_enables_only_the_layers_the_copper_count_needs():
+def test_prepare_overlay_layers_enables_only_the_layers_the_copper_count_needs():
     board = LayersBoard(copper=(BL.BL_F_Cu, BL.BL_B_Cu), enabled=(BL.BL_F_SilkS,))
 
-    overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=False)  # type: ignore[arg-type]
+    overlay.prepare_overlay_layers(board, overlay.Outputs(overlay=True), dry_run=False)  # type: ignore[arg-type]
 
     [(count, layers)] = board.set_calls
     assert count == 2
     assert sorted(layers) == sorted([BL.BL_F_SilkS, BL.BL_User_1, BL.BL_User_2])
 
 
-def test_overlay_ready_leaves_the_layers_alone_when_all_are_enabled():
+def test_prepare_overlay_layers_leaves_the_layers_alone_when_all_are_enabled():
     board = LayersBoard(
         enabled=(BL.BL_User_1, BL.BL_User_2, BL.BL_User_3, BL.BL_User_4)
     )
 
-    assert overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=False)  # type: ignore[arg-type]
+    assert overlay.prepare_overlay_layers(
+        board,  # type: ignore[arg-type]
+        overlay.Outputs(overlay=True),
+        dry_run=False,
+    )
     assert board.set_calls == []
 
 
-def test_overlay_ready_in_dry_run_warns_without_enabling(log):
+def test_prepare_overlay_layers_in_dry_run_warns_without_enabling(log):
     board = LayersBoard()
 
-    ready = overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=True)  # type: ignore[arg-type]
+    ready = overlay.prepare_overlay_layers(
+        board,  # type: ignore[arg-type]
+        overlay.Outputs(overlay=True),
+        dry_run=True,
+    )
 
     assert not ready
     assert board.set_calls == []
     assert any("User.1" in m and "PNGs only" in m for m in log)
 
 
-def test_overlay_ready_fails_when_kicad_does_not_enable_a_layer():
+def test_prepare_overlay_layers_fails_when_kicad_does_not_enable_a_layer():
     board = LayersBoard(refuse=(BL.BL_User_3,))
 
     with pytest.raises(overlay.OverlayLayersError, match="User.3") as e:
-        overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=False)  # type: ignore[arg-type]
+        overlay.prepare_overlay_layers(
+            board,  # type: ignore[arg-type]
+            overlay.Outputs(overlay=True),
+            dry_run=False,
+        )
 
     assert "User.1" not in str(e.value)
 
 
 @pytest.mark.parametrize("bad", ["User3", "In3.Cu"])
 @pytest.mark.parametrize("dry_run", [False, True])
-def test_overlay_ready_rejects_a_name_that_is_not_an_overlay_layer(bad, dry_run):
+def test_prepare_overlay_layers_rejects_a_name_that_is_not_an_overlay_layer(
+    bad, dry_run
+):
     board = LayersBoard()
     outputs = overlay.Outputs(
         overlay=True, overlay_layers=("User.1", bad, "User.2", "User.4")
@@ -939,7 +957,7 @@ def test_overlay_ready_rejects_a_name_that_is_not_an_overlay_layer(bad, dry_run)
     with pytest.raises(
         overlay.OverlayLayersError, match="not valid overlay layers"
     ) as e:
-        overlay.overlay_ready(board, outputs, dry_run=dry_run)  # type: ignore[arg-type]
+        overlay.prepare_overlay_layers(board, outputs, dry_run=dry_run)  # type: ignore[arg-type]
 
     assert str(e.value).startswith(f"{bad} are not valid overlay layers")
     assert board.set_calls == []
