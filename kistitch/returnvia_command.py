@@ -17,6 +17,7 @@ from shapely.ops import unary_union
 from kistitch import overlay, render
 from kistitch.commit import Marker, MarkerKind
 from kistitch.placement import (
+    RunResult,
     RunSettings,
     check_outline,
     measure_only,
@@ -325,11 +326,32 @@ def ring_maps(
     return out
 
 
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class ReturnResult:
+    """Vias unserved within `distance` of all measured, after the run, with
+    the placement and its unfixable and forced vias unless the run only
+    measured. `full_map` is the heatmap view shown.
+
+    After a placement the figures are of the planned board: they hold once
+    the placement landed (`placement.commit`).
+    """
+
+    distance: float
+    unserved: int
+    total: int
+    placement: RunResult | None
+    unfixable: int
+    forced: int
+    full_map: bool
+    layers_enabled: tuple[str, ...]
+
+
 def log_results(
     references: Sequence[ViaReferences],
     results: Sequence[PlaneReturn],
     distance: float,
-) -> None:
+) -> tuple[int, int]:
+    """Log the measurement; returns the vias unserved and the vias measured."""
     exempt = sum(r.exempt for r in references)
     logger.info(f"  {exempt} vias exempt: connected to copper on fewer than two layers")
     unserved = [r for r in results if not r.served]
@@ -350,6 +372,7 @@ def log_results(
         f"{COMMAND}: {len(failing)} of {len(vias)} vias unserved within "
         f"{distance:g} mm; {len(unserved)} of {len(results)} via-plane returns"
     )
+    return len(failing), len(vias)
 
 
 def execute(
@@ -363,7 +386,7 @@ def execute(
     full_map: bool = False,
     refill: bool = True,
     kicad: kipy.KiCad | None = None,
-) -> None:
+) -> ReturnResult:
     """Run returnvia against the open board.
 
     `check` only measures the existing returns: no planning, no kicad-cli,
@@ -379,6 +402,7 @@ def execute(
     layers = overlay.prepare_overlay_layers(board, outputs, dry_run)
 
     planner = ReturnViaPlanner()
+    result: RunResult | None = None
     if check:
         snapshot, plan = measure_only(kicad, board, refill)
     else:
@@ -401,7 +425,7 @@ def execute(
     references = via_references(fields.snapshot, grounds)
     results = fields.measure(references, options.distance)
     logger.info(f"{COMMAND} returns" + (" (check only)" if check else ""))
-    log_results(references, results, options.distance)
+    unserved, total = log_results(references, results, options.distance)
 
     maps = copper_maps(fields, references, grounds)
     marks = markers(results, maps, options.distance)
@@ -455,3 +479,13 @@ def execute(
             OVERLAY_COMMIT,
             unserved_markers(results, snapshot.vias) if check else None,
         )
+    return ReturnResult(
+        distance=options.distance,
+        unserved=unserved,
+        total=total,
+        placement=result,
+        unfixable=0 if result is None else result.unfixable,
+        forced=sum(u.forced for u in plan.units),
+        full_map=full_map,
+        layers_enabled=layers.enabled,
+    )

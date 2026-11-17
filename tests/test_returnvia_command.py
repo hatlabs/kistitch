@@ -23,7 +23,7 @@ from kistitch.commit import (
     marker_items,
 )
 from kistitch.placement import RunResult
-from kistitch.plan import QUANTISATION, Plan, PlannedUnit
+from kistitch.plan import QUANTISATION, Plan, PlannedUnit, UnfixableSpot
 from kistitch.pourstitch import Options
 from kistitch.raster import CoverageMap, Grid
 from kistitch.returnpath import (
@@ -218,7 +218,7 @@ def info_log():
 
 
 def run(board, check=True, dry_run=False, full_map=False, **outputs):
-    returnvia_command.execute(
+    return returnvia_command.execute(
         OPTIONS,
         overlay.Outputs(**outputs),
         check=check,
@@ -787,6 +787,50 @@ def test_check_logs_each_unserved_via_plane_and_commits_nothing(fakes, log):
     distance = float(line.rsplit(":", 1)[1].split()[0])
     assert distance > 2 * DISTANCE
     assert any("1 of 1 vias unserved" in m and "1 of 2 via-plane" in m for m in log)
+
+
+def test_check_returns_the_unserved_and_total_vias_it_logs(fakes, log):
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+
+    result = run(Board(), overlay=True)
+
+    assert any("1 of 1 vias unserved within" in m for m in log)
+    assert (result.unserved, result.total) == (1, 1)
+    assert result.distance == DISTANCE
+    assert result.placement is None
+    assert (result.unfixable, result.forced) == (0, 0)
+    assert result.full_map is False
+    assert result.layers_enabled == ()
+
+
+def test_check_returns_the_view_and_the_layers_it_enabled(fakes):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+
+    result = run(Board(enabled=USER[:2]), overlay=True, full_map=True)
+
+    assert result.full_map is True
+    assert result.layers_enabled == ("User.3", "User.4")
+    assert (result.unserved, result.total) == (0, 1)
+
+
+def test_place_returns_the_placement_and_its_unfixable_and_forced_vias(fakes):
+    fakes.snap = snapshot()
+    spot = UnfixableSpot(SIG, "SIG", "no room")
+    fakes.plan = Plan(
+        units=(
+            PlannedUnit((6.0, 5.0), "GND", VIA, forced=True),
+            PlannedUnit((15.0, 15.0), "GND", VIA),
+        ),
+        # One via unfixable on two of its planes counts once.
+        unfixable=(spot, UnfixableSpot(SIG, "SIG", "no room", "In2.Cu")),
+    )
+
+    result = run(Board(), check=False)
+
+    assert result.placement is not None
+    assert result.placement.placed == 2
+    assert (result.unfixable, result.forced) == (1, 1)
+    assert (result.unserved, result.total) == (1, 1)
 
 
 def test_unserved_lines_are_debug_and_the_summary_info(fakes, log, info_log):
