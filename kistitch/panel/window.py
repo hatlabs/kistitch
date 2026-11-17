@@ -148,11 +148,14 @@ class Poster(QObject):
         self._lock = threading.Lock()
         self._closed = False
 
-    def post(self, call: Callable[[], None]) -> None:
+    def post(self, call: Callable[[], None]) -> bool:
+        """Whether `call` will run: not once closed."""
         # Under the lock, so no post emits once `close` has returned.
         with self._lock:
-            if not self._closed:
-                self._posted.emit(call)
+            if self._closed:
+                return False
+            self._posted.emit(call)
+            return True
 
     def close(self) -> None:
         with self._lock:

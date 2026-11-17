@@ -5,13 +5,18 @@ import os
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from loguru import Message
 
 pytest.importorskip("PySide6.QtWidgets")
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from kipy.errors import ConnectionError as KiCadConnectionError
+from loguru import logger
 from panel_fakes import (
     BOARD,
     Clock,
@@ -679,6 +684,35 @@ class TestClose:
         settle()
         assert calls == []
 
+    def test_an_error_after_closing_on_the_push_is_logged(self, make: Make) -> None:
+        m = make()
+        error = RuntimeError("refill broke")
+        m.runner.outcome = error
+        m.runner.stages = ((Stage.COMMIT, None), (Stage.REFILL, None))
+
+        def during(stage: Stage) -> None:
+            settle()
+            if stage is Stage.COMMIT:
+                m.window.close()
+                settle()
+
+        m.runner.during = during
+        logged: list[BaseException | None] = []
+
+        def sink(message: "Message") -> None:
+            exception = message.record["exception"]
+            logged.append(None if exception is None else exception.value)
+
+        handle = logger.add(sink, level="ERROR")
+        try:
+            m.window.cards[Step.POWER].place.click()
+            m.held.finish()
+        finally:
+            logger.remove(handle)
+
+        assert not m.window.isVisible()
+        assert logged == [error]
+
     @pytest.mark.parametrize("dismiss", [QMessageBox.close, QMessageBox.reject])
     def test_dismissing_the_question_lets_closing_ask_again(
         self, make: Make, dismiss: Callable[[QMessageBox], object]
@@ -822,3 +856,10 @@ class TestPoster:
         settle()
 
         assert calls == [1]
+
+    def test_post_says_whether_the_call_will_run(self, app: QApplication) -> None:
+        poster = Poster()
+
+        assert poster.post(lambda: None)
+        poster.close()
+        assert not poster.post(lambda: None)

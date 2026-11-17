@@ -1662,6 +1662,16 @@ class TestClose:
         assert seen == [(Stage.COMMIT, []), (Stage.REFILL, [True])]
         assert p.closed == [True]
 
+    def test_a_failure_after_closing_mid_commit_is_logged(self, log: list[str]) -> None:
+        p = panel()
+        p.runner.stages = ((Stage.COMMIT, None),)
+        p.runner.during = lambda stage: p.controller.close()
+
+        place(p, Step.POWER, busy())
+
+        assert p.closed == [True]
+        assert any("nothing committed" in line for line in log)
+
     def test_closing_during_the_refill_after_the_commit_closes_at_once(
         self,
     ) -> None:

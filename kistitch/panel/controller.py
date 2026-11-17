@@ -288,8 +288,9 @@ def run_job(
             return clear(kicad, found, DEFAULT_OVERLAY_LAYERS, progress=progress)
 
 
-Post = Callable[[Callable[[], None]], None]
-"""Runs a callable on the controller's thread."""
+Post = Callable[[Callable[[], None]], bool | None]
+"""Runs a callable on the controller's thread; False if it never will, as
+once the window has closed."""
 
 
 class Spawn(Protocol):
@@ -1124,7 +1125,11 @@ class Controller:
                 ending = e
             finally:
                 logger.remove(sink)
-            post(partial(self._ended, run, ending, tuple(lines)))
+            delivered = post(partial(self._ended, run, ending, tuple(lines)))
+            if delivered is False and isinstance(ending, BaseException):
+                logger.opt(exception=ending).error(
+                    "A {} run failed after the panel closed", action.kind.value
+                )
 
         self._spawn(work, daemon=False)
         return True
@@ -1254,6 +1259,9 @@ class Controller:
         if outcome.unexpected:
             logger.opt(exception=error).error("The panel's run failed")
             self._details_open = True
+        elif self._closing:
+            # The window closes right after this, so the outcome goes unseen.
+            logger.warning(f"{outcome.headline}: {outcome.body}")
         match error:
             case ApiError() if kicad_busy(error):
                 self._retry = action
