@@ -204,6 +204,17 @@ class TestOutcomes:
 
         assert (o.icon, o.headline) == (Icon.DONE, "Pad vias: nothing to place")
 
+    def test_place_with_splits_and_no_vias_keeps_the_warning(self) -> None:
+        result = run_result(splits=2)
+
+        o = placed_outcome(Step.PAD_VIAS, result, placed(result))
+
+        assert (o.icon, o.headline) == (
+            Icon.WARNING,
+            "Pad vias: no vias placed; 2 possible pour splits",
+        )
+        assert "squares on User.Eco2" in o.body
+
     def test_place_with_splits(self) -> None:
         result = run_result(placed=27, splits=2)
 

@@ -230,9 +230,13 @@ def heatmap_drawn(result: HeatmapResult) -> bool:
 def placed_outcome(step: Step, result: PlaceResult, summary: Summary) -> Outcome:
     placement = placement_of(result)
     body = summary.lines[0]
-    if not placement.placed:
+    if not placement.placed and not placement.splits:
         return Outcome(summary.icon, f"{step.label}: nothing to place", body)
-    vias = f"{step.label}: placed {counted(placement.placed, 'via')}"
+    vias = (
+        f"{step.label}: placed {counted(placement.placed, 'via')}"
+        if placement.placed
+        else f"{step.label}: no vias placed"
+    )
     if placement.splits:
         return Outcome(
             Icon.WARNING,

@@ -31,6 +31,7 @@ work itself goes to `spawn`, which runs it on a new worker thread, a
 daemon one for a probe.
 """
 
+import math
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -440,6 +441,8 @@ def parse_via(text: str) -> ViaSize | str | None:
         diameter, drill = (float(v) for v in text.split("/"))
     except ValueError:
         return "Expected diameter/drill, e.g. 0.6/0.3"
+    if not (math.isfinite(diameter) and math.isfinite(drill)):
+        return "Expected diameter/drill, e.g. 0.6/0.3"
     if diameter <= 0 or drill <= 0:
         return "Sizes must be more than 0"
     if drill >= diameter:
@@ -605,7 +608,9 @@ class Controller:
     def field_errors(self, step: Step) -> Mapping[Field, str]:
         f = self._fields[step]
         errors: dict[Field, str] = {}
-        if f.distance is not None and f.distance <= 0:
+        if f.distance is not None and not (
+            math.isfinite(f.distance) and f.distance > 0
+        ):
             errors[Field.DISTANCE] = "Distance must be more than 0"
         for which, text in ((Field.VIA, f.via), (Field.FALLBACK_VIA, f.fallback_via)):
             parsed = parse_via(text)

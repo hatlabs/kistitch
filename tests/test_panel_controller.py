@@ -1458,6 +1458,14 @@ class TestFields:
         assert c.fields(Step.GROUND) == StepFields(distance=3.0, fallback_via="0.5/0.3")
         assert c.fields(Step.PAD_VIAS) == StepFields()
 
+    def test_non_finite_sizes_and_distances_are_invalid(self) -> None:
+        c = panel().controller
+
+        c.set_fields(Step.RETURN, StepFields(distance=float("nan"), via="0.6/nan"))
+
+        assert set(c.field_errors(Step.RETURN)) == {Field.VIA, Field.DISTANCE}
+        assert not c.step_enabled(Step.RETURN)
+
     def test_drill_not_smaller_than_the_diameter_disables_only_that_step(self) -> None:
         c = panel().controller
 
