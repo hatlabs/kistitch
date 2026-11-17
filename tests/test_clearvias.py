@@ -7,7 +7,7 @@ from shapely.geometry import LineString, box
 
 from kistitch import cli
 from kistitch.clearvias import stitching_vias
-from kistitch.commit import eco2_segment
+from kistitch.commit import REFILLS_OFF_MESSAGE, eco2_segment
 from kistitch.snapshot import Pad, PadKind, Snapshot, Track, Via, Zone
 
 TWO_LAYERS = ("F.Cu", "B.Cu")
@@ -158,20 +158,30 @@ def kipy_via(via_id):
 def clear(monkeypatch, snap, argv, **board_args):
     board = ViaBoard([kipy_via(v.id) for v in snap.vias], **board_args)
     monkeypatch.setattr(cli.kipy, "KiCad", lambda: FakeKiCad(board))
-    monkeypatch.setattr(cli.Snapshot, "from_board", staticmethod(lambda b: snap))
+
+    def from_board(b):
+        b.calls.append("snapshot")
+        return snap
+
+    monkeypatch.setattr(cli.Snapshot, "from_board", staticmethod(from_board))
+    monkeypatch.setattr(cli, "configure_logging", lambda: None)
     monkeypatch.setattr(sys, "argv", ["kistitch", *argv])
-    cli.execute_clear(cli.parse_args())
+    cli.main()
     return board
 
 
 TWO_GND_ONE_POWER = (via("GND", 5, 5), via("GND", 15, 5), via("+3.3V", 30, 5))
 
 
-def test_clear_vias_removes_them_in_one_commit_then_refills(monkeypatch, log):
+def test_clear_vias_refills_selects_removes_in_one_commit_then_refills(
+    monkeypatch, log
+):
     board = clear(monkeypatch, snapshot(TWO_GND_ONE_POWER), ["clear", "--vias"])
 
     assert any("Removing stitching vias: 2 on GND, 1 on +3.3V" in m for m in log)
     assert board.calls == [
+        "refill_zones",
+        "snapshot",
         "begin_commit",
         ("remove_items", [v.id for v in TWO_GND_ONE_POWER]),
         "push_commit",
@@ -187,7 +197,7 @@ def test_clear_vias_and_markers_go_in_one_remove(monkeypatch):
 
     board = clear(monkeypatch, snap, ["clear", "--vias"], shapes=[marker])
 
-    assert board.calls[:3] == [
+    assert board.calls[2:5] == [
         "begin_commit",
         ("remove_items", ["marker", TWO_GND_ONE_POWER[0].id]),
         "push_commit",
@@ -236,7 +246,23 @@ def test_clear_vias_warns_about_unfilled_zones(monkeypatch, log, nets):
 
     clear(monkeypatch, snap, ["clear", "--vias", *nets])
 
-    assert any("1 zone of GND has no fill" in m for m in log)
+    assert any("1 zone of GND has no fill after the refill" in m for m in log)
+    assert not any("press B" in m for m in log)
+
+
+def test_clear_vias_without_refills_asks_for_a_refill_of_unfilled_zones(
+    monkeypatch, log
+):
+    unfilled = Zone(
+        net="GND", layers=TWO_LAYERS, priority=0, outline=GND_AREA, fills={}
+    )
+    snap = snapshot(TWO_GND_ONE_POWER, zones=(unfilled, ZONES[1]))
+
+    clear(monkeypatch, snap, ["--no-refill", "clear", "--vias"])
+
+    assert any(
+        "1 zone of GND has no fill" in m and "press B in KiCad" in m for m in log
+    )
 
 
 def test_clear_vias_ignores_unfilled_zones_of_other_nets(monkeypatch, log):
@@ -261,6 +287,7 @@ def test_clear_vias_nets_limit_the_removal(monkeypatch):
 def test_clear_vias_dry_run_removes_nothing_and_reports_per_net(monkeypatch, log):
     board = clear(monkeypatch, snapshot(TWO_GND_ONE_POWER), ["-n", "clear", "--vias"])
 
+    assert board.calls[:2] == ["refill_zones", "snapshot"]
     assert "push_commit" not in board.calls
     assert board.calls[-1] == "drop_commit"
     assert any("Would remove stitching vias: 2 on GND, 1 on +3.3V" in m for m in log)
@@ -271,3 +298,49 @@ def test_clear_without_vias_leaves_vias_and_zones_alone(monkeypatch, log):
 
     assert board.calls == []
     assert any("Nothing to clear" in m for m in log)
+
+
+def test_clear_vias_without_refills_only_removes(monkeypatch, log):
+    board = clear(
+        monkeypatch, snapshot(TWO_GND_ONE_POWER), ["--no-refill", "clear", "--vias"]
+    )
+
+    assert board.calls == [
+        "snapshot",
+        "begin_commit",
+        ("remove_items", [v.id for v in TWO_GND_ONE_POWER]),
+        "push_commit",
+    ]
+    assert len([m for m in log if REFILLS_OFF_MESSAGE in m]) == 1
+    assert not [m for m in log if "refill not confirmed" in m]
+
+
+def test_clear_vias_dry_run_without_refills_does_not_refill(monkeypatch, log):
+    board = clear(
+        monkeypatch,
+        snapshot(TWO_GND_ONE_POWER),
+        ["--no-refill", "-n", "clear", "--vias"],
+    )
+
+    assert "refill_zones" not in board.calls
+    assert len([m for m in log if REFILLS_OFF_MESSAGE in m]) == 1
+
+
+def test_clear_vias_warns_and_goes_on_when_the_first_refill_is_unconfirmed(
+    monkeypatch, log
+):
+    monkeypatch.setattr(cli, "refill_tolerant", lambda kicad, board: False)
+
+    board = clear(monkeypatch, snapshot(TWO_GND_ONE_POWER), ["clear", "--vias"])
+
+    assert any("Zone refill not confirmed; fills may be stale" in m for m in log)
+    assert "push_commit" in board.calls
+
+
+def test_clear_without_vias_does_not_mention_refills(monkeypatch, log):
+    marker = eco2_segment((1, 1), (2, 2))
+
+    board = clear(monkeypatch, snapshot(()), ["--no-refill", "clear"], shapes=[marker])
+
+    assert "push_commit" in board.calls
+    assert not [m for m in log if REFILLS_OFF_MESSAGE in m]

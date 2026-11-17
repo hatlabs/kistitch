@@ -9,7 +9,7 @@ from kipy.util.board_layer import is_copper_layer
 from shapely.geometry import box
 
 from kistitch import cli, drc, overlay, pourstitch_command, render
-from kistitch.commit import MARKER_LAYER, eco2_segment
+from kistitch.commit import MARKER_LAYER, REFILLS_OFF_MESSAGE, eco2_segment
 from kistitch.placement import RunResult, RunSettings
 from kistitch.plan import POURSTITCH_POWER_DISTANCE, StitchClass
 from kistitch.pourstitch import Options
@@ -131,6 +131,21 @@ def test_check_reports_whole_unstitched_pour_and_commits_nothing(fakes, log):
     assert len(reports) == len(LAYERS)
     assert all(f"{POUR_MM2:.2f} mm²" in line for line in reports)
     assert all("0 existing stitches" in line for line in reports)
+
+
+def test_check_without_refills_uses_the_fills_as_they_are(fakes, log):
+    board = Board()
+
+    pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(),
+        check=True,
+        refill=False,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
+
+    assert board.calls == []
+    assert len([line for line in log if REFILLS_OFF_MESSAGE in line]) == 1
 
 
 def test_check_with_overlay_creates_only_the_image_commit(
@@ -380,6 +395,7 @@ def test_clear_removes_the_overlays_pourstitch_placed(fakes, monkeypatch, tagged
             dry_run=False,
             vias=False,
             nets=None,
+            refill=True,
         )
     )
 

@@ -39,6 +39,10 @@ MARKER_MARGIN = 0.3
 MARKER_WIDTH = 0.1
 REFILL_TIMEOUT_S = 300.0
 REFILL_POLL_S = 1.0
+REFILLS_OFF_MESSAGE = (
+    "Automatic zone refills are off: using the zone fills as they are; "
+    "refill zones in KiCad (press B) before running kistitch"
+)
 COMMIT_PREFIX = "kistitch"
 
 
@@ -193,9 +197,10 @@ def commit_units(
     units: Sequence[PlannedUnit],
     markers: Sequence[Marker],
     stale: Sequence[kipy.board_types.BoardShape] = (),
+    refill: bool = True,
 ) -> int:
     """Remove the stale markers and create the units plus the new Eco2 markers
-    as one commit.
+    as one commit, then refill the zones if `refill`.
 
     Returns the number of placed vias and tracks.
     """
@@ -228,7 +233,8 @@ def commit_units(
             + (f", replacing {len(stale)} earlier marker shapes" if stale else "")
         )
 
-    refill_after_commit(kicad, board)
+    if refill:
+        refill_after_commit(kicad, board)
     return len(created)
 
 

@@ -1053,6 +1053,7 @@ def test_clear_removes_the_returnvia_overlays(fakes, monkeypatch):
             dry_run=False,
             vias=False,
             nets=None,
+            refill=True,
         )
     )
 

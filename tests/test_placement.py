@@ -1075,3 +1075,94 @@ def test_a_busy_push_leaves_the_report_to_the_caller():
     assert error.value.__context__ is None
     assert not board.dropped
     assert errors == []
+
+
+# ---- automatic refills off ----------------------------------------------------
+
+
+def refills_off_lines(log):
+    return [line for line in log if commit.REFILLS_OFF_MESSAGE in line]
+
+
+def test_refills_off_message_asks_for_a_refill_before_the_run():
+    # A refill during the run changes the fills and fails it with
+    # BoardChangedError, so the message must not invite one.
+    assert "before running kistitch" in commit.REFILLS_OFF_MESSAGE
+    assert "after edits" not in commit.REFILLS_OFF_MESSAGE
+
+
+def test_run_without_refills_refills_neither_before_nor_after_the_commit(
+    saved_board, log
+):
+    board, kicad = saved_board
+
+    placement.run_placement(
+        plan_at((1, 1)), None, placement.RunSettings("t", refill=False), kicad
+    )
+
+    assert len(pushes(board)) == 1
+    assert "refill_zones" not in board.calls
+    (line,) = refills_off_lines(log)
+    assert line.startswith("INFO")
+    assert not [line for line in log if "refill not confirmed" in line]
+
+
+def test_dry_run_without_refills_does_not_refill(saved_board, log):
+    board, kicad = saved_board
+
+    placement.run_placement(
+        plan_at((1, 1)),
+        None,
+        placement.RunSettings("t", dry_run=True, refill=False),
+        kicad,
+    )
+
+    assert "refill_zones" not in board.calls
+    assert len(refills_off_lines(log)) == 1
+
+
+def test_board_changed_without_refills_does_not_blame_a_refill(saved_board):
+    board, kicad = saved_board
+    board.texts = ["(kicad_pcb)", "(kicad_pcb (edited))"]
+
+    with pytest.raises(placement.BoardChangedError) as error:
+        placement.run_placement(
+            plan_at((1, 1)), None, placement.RunSettings("t", refill=False), kicad
+        )
+
+    assert str(error.value) == "The board changed during the run; run again"
+    assert "refill_zones" not in board.calls
+
+
+def test_measure_only_without_refills_uses_the_fills_as_they_are(monkeypatch, log):
+    board, kicad, snap = object(), object(), Snapshot(copper_layers=("F.Cu",))
+    monkeypatch.setattr(
+        placement,
+        "refill_tolerant",
+        lambda k, b: pytest.fail("refilled with refills off"),
+    )
+    monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda b: snap))
+
+    result = placement.measure_only(kicad, board, refill=False)  # type: ignore[arg-type]
+
+    assert result == (snap, Plan())
+    (line,) = refills_off_lines(log)
+    assert line.startswith("INFO")
+    assert not [line for line in log if "stale" in line]
+
+
+def test_commit_without_refill_only_commits(log):
+    board = RecordingBoard()
+
+    commit.commit_units(
+        FakeKiCad(board),  # type: ignore[arg-type]
+        board,  # type: ignore[arg-type]
+        "x",
+        [unit(1, 1)],
+        [],
+        refill=False,
+    )
+
+    assert len(pushes(board)) == 1
+    assert "refill_zones" not in board.calls
+    assert not [line for line in log if "refill" in line.lower()]

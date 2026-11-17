@@ -14,6 +14,7 @@ from loguru import logger
 
 from kistitch import drc
 from kistitch.commit import (
+    REFILLS_OFF_MESSAGE,
     Marker,
     MarkerKind,
     commit_units,
@@ -42,6 +43,7 @@ class RunSettings:
     # and per-spot markers and warnings would only be noise.
     mark_unfixable: bool = True
     allow_splits: bool = True
+    refill: bool = True
 
 
 class SplitError(RuntimeError):
@@ -58,9 +60,14 @@ class RunResult:
     prune: drc.PruneResult
 
 
-def measure_only(kicad: kipy.KiCad, board: kipy.board.Board) -> tuple[Snapshot, Plan]:
-    """The refilled board and an empty plan, for a run that places nothing."""
-    if not refill_tolerant(kicad, board):
+def measure_only(
+    kicad: kipy.KiCad, board: kipy.board.Board, refill: bool = True
+) -> tuple[Snapshot, Plan]:
+    """The board, refilled if `refill`, and an empty plan, for a run that
+    places nothing."""
+    if not refill:
+        logger.info(REFILLS_OFF_MESSAGE)
+    elif not refill_tolerant(kicad, board):
         logger.warning("Zone refill not confirmed; fills may be stale")
     return Snapshot.from_board(board), Plan()
 
@@ -131,8 +138,9 @@ def run_placement(
     """Run a planner against the open board.
 
     The board outline, kicad-cli and the project files are checked before
-    anything touches the board. Zones are refilled before the snapshot even in
-    a dry run, because stale fills would drive the placement.
+    anything touches the board. Unless `settings.refill` is off, zones are
+    refilled before the snapshot even in a dry run, because stale fills would
+    drive the placement.
     """
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
@@ -146,8 +154,11 @@ def run_placement(
         + (f", {project.dru}" if project.dru else " (no .kicad_dru)")
     )
 
-    refilled = refill_tolerant(kicad, board)
-    if not refilled:
+    unconfirmed_refill = False
+    if not settings.refill:
+        logger.info(REFILLS_OFF_MESSAGE)
+    elif not refill_tolerant(kicad, board):
+        unconfirmed_refill = True
         logger.warning("Zone refill not confirmed; fills in the snapshot may be stale")
     snapshot = Snapshot.from_board(board)
 
@@ -181,12 +192,20 @@ def run_placement(
         raise BoardChangedError(
             "The board changed during the run; run again"
             + (
-                ""
-                if refilled
-                else " (a zone refill still running from the start can also do this)"
+                " (a zone refill still running from the start can also do this)"
+                if unconfirmed_refill
+                else ""
             )
         )
-    commit_units(kicad, board, settings.command, result.plan.units, markers, stale)
+    commit_units(
+        kicad,
+        board,
+        settings.command,
+        result.plan.units,
+        markers,
+        stale,
+        refill=settings.refill,
+    )
     return RunResult(snapshot, result)
 
 
