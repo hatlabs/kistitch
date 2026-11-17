@@ -22,6 +22,7 @@ from kistitch.commit import (
     refill_after_commit,
 )
 from kistitch.overlay import board_placement, overlays_on
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.snapshot import Snapshot, outline_from_edge_paths, read_edge_paths
 
 
@@ -40,10 +41,13 @@ def clear(
     vias: RemovableVias | None = None,
     refill: bool = True,
     dry_run: bool = False,
+    progress: Progress = NO_PROGRESS,
 ) -> Cleared:
     """Remove the markers, kistitch's overlays and, of `vias`, those that
     are still stitching vias, in one commit; then refill the zones if `refill`,
-    vias were removed and the commit is known to have landed."""
+    vias were removed and the commit is known to have landed. A stop is
+    honoured up to the commit."""
+    progress.enter(Stage.READ)
     shapes = board.get_shapes()
     eco2_shapes = marker_shapes(shapes)
     outline = outline_from_edge_paths(read_edge_paths(shapes))
@@ -58,6 +62,7 @@ def clear(
         logger.info("Nothing to clear")
         return Cleared(vias=0, commit=CommitOutcome.NOTHING)
 
+    progress.enter(Stage.COMMIT)
     commit = board.begin_commit()
     board.remove_items([*eco2_shapes, *images, *removed])
     if dry_run:
@@ -69,6 +74,7 @@ def clear(
         return Cleared(vias=0, commit=CommitOutcome.UNKNOWN)
     if removed and refill:
         # Close the fills over the holes the removed vias leave.
+        progress.report(Stage.REFILL, None)
         refill_after_commit(kicad, board)
     return Cleared(vias=len(removed), commit=CommitOutcome.LANDED)
 

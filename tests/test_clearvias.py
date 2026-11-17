@@ -14,6 +14,7 @@ from kistitch.commit import (
     eco2_segment,
 )
 from kistitch.overlay import DEFAULT_OVERLAY_LAYERS
+from kistitch.progress import Cancelled, Stage
 from kistitch.snapshot import Pad, PadKind, Snapshot, Track, Via, Zone
 
 TWO_LAYERS = ("F.Cu", "B.Cu")
@@ -521,3 +522,70 @@ def test_nothing_to_clear_reports_nothing(monkeypatch):
         nets=None, counts={}, unfilled_zones={}, ids=frozenset()
     )
     assert cleared == clear_command.Cleared(vias=0, commit=CommitOutcome.NOTHING)
+
+
+def test_removal_reports_reading_committing_and_the_refill(monkeypatch, recorder):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+    rec = recorder(board.calls)
+
+    clear_command.clear(
+        kicad, board, DEFAULT_OVERLAY_LAYERS, found, progress=rec.progress
+    )  # type: ignore[arg-type]
+
+    assert [s for s, _ in rec.stages()] == [Stage.READ, Stage.COMMIT, Stage.REFILL]
+    committing = board.calls.index((Stage.COMMIT, None))
+    assert board.calls[committing - 1] == "check"
+    assert "check" not in board.calls[committing:]
+    assert board.calls.index("begin_commit") > committing
+
+
+def test_removal_without_refills_reports_no_refill(monkeypatch, recorder):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    found = clearvias.find_removable_vias(kicad, board, refill=False)  # type: ignore[arg-type]
+    rec = recorder()
+
+    clear_command.clear(
+        kicad,  # type: ignore[arg-type]
+        board,  # type: ignore[arg-type]
+        DEFAULT_OVERLAY_LAYERS,
+        found,
+        refill=False,
+        progress=rec.progress,
+    )
+
+    assert [s for s, _ in rec.stages()] == [Stage.READ, Stage.COMMIT]
+
+
+def test_removal_stopped_before_its_commit_removes_nothing(monkeypatch, recorder):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+    before = list(board.calls)
+    rec = recorder(stop_at=Stage.READ)
+
+    with pytest.raises(Cancelled):
+        clear_command.clear(
+            kicad, board, DEFAULT_OVERLAY_LAYERS, found, progress=rec.progress
+        )  # type: ignore[arg-type]
+
+    assert board.calls == [*before, "snapshot"]
+    assert removed_ids(board) == []
+
+
+def test_removal_stopped_once_committing_still_removes_and_refills(
+    monkeypatch, recorder
+):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+    rec = recorder(stop_at=Stage.COMMIT)
+
+    cleared = clear_command.clear(
+        kicad,  # type: ignore[arg-type]
+        board,  # type: ignore[arg-type]
+        DEFAULT_OVERLAY_LAYERS,
+        found,
+        progress=rec.progress,
+    )
+
+    assert cleared == clear_command.Cleared(vias=3, commit=CommitOutcome.LANDED)
+    assert board.calls[-1] == "refill_zones"
