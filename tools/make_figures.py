@@ -5,7 +5,7 @@ showing a signal that changes layers through a via, and its return current
 crossing between the two ground planes through a nearby ground via. Run it
 after changing the drawing and commit the SVG:
 
-    .venv/bin/python scripts/make_figures.py
+    .venv/bin/python tools/make_figures.py
 """
 
 from itertools import pairwise

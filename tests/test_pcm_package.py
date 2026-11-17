@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     import pcm_package
 else:
     _spec = importlib.util.spec_from_file_location(
-        "pcm_package", ROOT / "scripts" / "pcm_package.py"
+        "pcm_package", ROOT / "tools" / "pcm_package.py"
     )
     assert _spec is not None and _spec.loader is not None
     pcm_package = importlib.util.module_from_spec(_spec)

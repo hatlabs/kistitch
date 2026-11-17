@@ -35,15 +35,15 @@ function test {
 function lint {
   #@ Check linting and formatting with ruff
   #@ Category: Development
-  .venv/bin/ruff check kistitch tests pcm scripts
-  .venv/bin/ruff format --check kistitch tests pcm scripts
+  .venv/bin/ruff check kistitch tests pcm tools
+  .venv/bin/ruff format --check kistitch tests pcm tools
 }
 
 function format {
   #@ Format the code and apply ruff's safe lint fixes
   #@ Category: Development
-  .venv/bin/ruff check --fix kistitch tests pcm scripts
-  .venv/bin/ruff format kistitch tests pcm scripts
+  .venv/bin/ruff check --fix kistitch tests pcm tools
+  .venv/bin/ruff format kistitch tests pcm tools
 }
 
 function check {
@@ -60,7 +60,7 @@ function check {
 function pcm-package {
   #@ Build the KiCad PCM package and repository files for a stable release tag v<VERSION>+<N> into dist/pcm
   #@ Category: Release
-  .venv/bin/python scripts/pcm_package.py "$@"
+  .venv/bin/python tools/pcm_package.py "$@"
 }
 
 ################################################################################

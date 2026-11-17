@@ -5,7 +5,7 @@ into ``pcm/plugins/`` and the 64 px package icon that KiCad's Plugin and
 Content Manager lists into ``pcm/resources/icon.png``. Run it after changing
 the glyph and commit the PNGs:
 
-    .venv/bin/python scripts/make_icons.py
+    .venv/bin/python tools/make_icons.py
 """
 
 from dataclasses import dataclass

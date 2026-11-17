@@ -170,7 +170,7 @@ jobs:
       # The script needs only the standard library, so no sync.
       - name: Build the PCM files
         if: steps.index.outputs.update == 'true'
-        run: uv run --no-project --python 3.14 python scripts/pcm_package.py "$TAG" --out dist/pcm
+        run: uv run --no-project --python 3.14 python tools/pcm_package.py "$TAG" --out dist/pcm
 
       - name: Create the index release
         if: steps.index.outputs.update == 'true'

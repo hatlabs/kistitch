@@ -27,6 +27,8 @@ cd kistitch
 
 Tests never need a running KiCad. The panel's widget tests run on Qt's offscreen platform and are skipped without the `gui` extra.
 
+`tools/make_icons.py` draws the plugin icons in `pcm/` and `tools/make_figures.py` draws `docs/images/return-path.svg`. Their output is committed: edit the script, run it with `.venv/bin/python`, and commit the regenerated files.
+
 ## Releasing
 
 Every merge to main stages a release: a pre-release tagged `v<VERSION>+<N>_pre` and a draft `v<VERSION>+<N>`, where N counts the builds of that version.

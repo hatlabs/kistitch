@@ -21,7 +21,7 @@ to the PCM. The index lists only the newest version.
 The package metadata lives in ``pcm/metadata.json``; the version entry comes
 from ``VERSION`` here. Usage:
 
-    .venv/bin/python scripts/pcm_package.py v<VERSION>+<N> [--out dist/pcm]
+    .venv/bin/python tools/pcm_package.py v<VERSION>+<N> [--out dist/pcm]
 """
 
 import argparse
