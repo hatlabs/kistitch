@@ -1,4 +1,6 @@
-"""The panel's window and Qt application (`main`).
+"""The panel's window and Qt application (`main`), one per KiCad instance:
+`main` brings an open panel for the same KiCad forward instead of opening
+another, and brings its own window forward at start (`instance`).
 
 `PanelWindow` stacks, top to bottom: the banner when KiCad or a board is
 missing, Setup (ground nets and automatic refills), the step cards and
@@ -22,6 +24,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
+from functools import partial
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -63,6 +66,15 @@ from kistitch.panel.controller import (
     RunJob,
     Spawn,
     run_job,
+)
+from kistitch.panel.instance import (
+    Claim,
+    bring_forward,
+    claim,
+    kicad_socket,
+    kicad_token,
+    serve,
+    server_name,
 )
 from kistitch.panel.present import OVERLAY_LAYERS, Confirmation, Icon, Step, View
 from kistitch.panel.probe import Probe, Prober
@@ -930,15 +942,19 @@ def start_thread(work: Callable[[], None], *, daemon: bool) -> None:
 
 
 def main() -> None:
-    """Open the panel and run until it is closed."""
+    """Open the panel and run until it is closed, or, when a panel for the
+    same KiCad is open, bring that one forward and return (`instance`)."""
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    outcome, server = claim(server_name(kicad_socket(), kicad_token()))
+    if outcome == Claim.RAISED:
+        return
     window = PanelWindow(Prober(), run_job, spawn=start_thread)
-    window.show()
-    window.raise_()
-    window.activateWindow()
+    serve(server, partial(bring_forward, window))
+    bring_forward(window)
     window.controller.activate()
     # Qt's event loop holds Python's handler back; the default one stops
     # the panel on Ctrl+C in the terminal that started it.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     app.exec()
+    server.close()
