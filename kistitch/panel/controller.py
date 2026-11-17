@@ -346,6 +346,11 @@ class NetPicker:
     """Which chosen nets left the board, until the next choice."""
     enabled: bool
 
+    @property
+    def checked(self) -> tuple[str, ...]:
+        """The nets the picker shows checked: the default is every one."""
+        return self.chosen if self.chosen is not None else self.candidates
+
 
 @dataclass(frozen=True)
 class GroundNets:

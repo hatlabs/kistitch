@@ -8,4 +8,7 @@ run worker runs one action, and a probe (`probe.Prober`) reads which
 board KiCad shows and its nets when the window is activated or on Retry.
 Every worker callback reaches the controller through a "post to the
 controller's thread" callable. `present` words results and errors.
+`window` draws the controller and forwards clicks to it, with the
+building blocks in `widgets`; only these two import Qt, which comes with
+the `gui` extra.
 """
