@@ -1729,6 +1729,39 @@ class TestClose:
 
         assert asked == [False]
 
+    def test_closing_while_committing_waits_for_the_push_not_the_refill(
+        self,
+    ) -> None:
+        p = panel()
+        p.runner.stages = ((Stage.COMMIT, None), (Stage.REFILL, None))
+        seen = []
+
+        def during(stage: Stage) -> None:
+            if stage is Stage.COMMIT:
+                assert not p.controller.close()
+            seen.append((stage, list(p.closed)))
+
+        p.runner.during = during
+        place(p, Step.POWER, POWER_PLACED)
+
+        assert seen == [(Stage.COMMIT, []), (Stage.REFILL, [True])]
+        assert p.closed == [True]
+
+    def test_closing_during_the_refill_after_the_commit_closes_at_once(
+        self,
+    ) -> None:
+        p = panel()
+        p.runner.stages = ((Stage.COMMIT, None), (Stage.REFILL, None))
+        answers = []
+        p.runner.during = lambda stage: (
+            answers.append(p.controller.close()) if stage is Stage.REFILL else None
+        )
+
+        place(p, Step.POWER, POWER_PLACED)
+
+        assert answers == [True]
+        assert p.closed == []
+
 
 class TestRunJob:
     @pytest.fixture

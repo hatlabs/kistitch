@@ -536,6 +536,7 @@ class Controller:
         self._log: list[str] = []
         self._details_open = False
         self._closing = False
+        self._closed = False
 
     # What the window shows.
 
@@ -999,17 +1000,31 @@ class Controller:
         run.stop.set()
         self._notify()
 
+    @property
+    def _pushed(self) -> bool:
+        """Whether the run's commit has reached KiCad; what follows it, a
+        refill or a measurement, KiCad and the worker finish on their own."""
+        run = self._run
+        return run is not None and run.committed and run.stage is not Stage.COMMIT
+
     def close(self) -> bool:
-        """Whether the window may close now. Mid-run it may not: the run
-        is cancelled if it still can be, and `closable` hears when it has
-        ended."""
+        """Whether the window may close now, discarding a held action.
+        Mid-run it may not until the commit is pushed: the run is cancelled
+        if it still can be, and `closable` hears when it has ended or pushed
+        its commit."""
         self._held = None
-        if self._run is None:
-            return True
         self._closing = True
+        if self._run is None or self._pushed:
+            self._closed = True
+            return True
         self.cancel()
         self._notify()
         return False
+
+    def _close_when_done(self) -> None:
+        if self._closing and not self._closed and (self._run is None or self._pushed):
+            self._closed = True
+            self._closable()
 
     # Starting actions.
 
@@ -1212,6 +1227,7 @@ class Controller:
         run.stage = stage
         run.count = count
         self._notify()
+        self._close_when_done()
 
     def _ended(
         self, run: _Run, ending: Result | BaseException, log: tuple[str, ...]
@@ -1225,8 +1241,7 @@ class Controller:
             self._finished(action, run, ending)
         self._probe_if_idle()
         self._notify()
-        if self._closing and self._run is None:
-            self._closable()
+        self._close_when_done()
 
     def _failed(self, action: _Action, error: BaseException) -> None:
         outcome = failure(error, action.step, action.kind)
