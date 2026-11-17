@@ -1,7 +1,9 @@
 import io
 import json
+import os
 import stat
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,7 @@ from kipy.proto.common.envelope_pb2 import ApiStatusCode
 
 from kistitch import drc
 from kistitch.plan import Plan, PlannedUnit, Stub, UnfixableSpot
+from kistitch.progress import Cancelled, Progress
 from kistitch.snapshot import Snapshot, ViaSize
 
 VIA = ViaSize(0.6, 0.3)
@@ -497,6 +500,41 @@ def test_prune_round_limit_drops_still_attributed_units_without_replanning():
     assert result.round_limit_hit
 
 
+def test_prune_reports_each_drc_round_against_the_limit(recorder):
+    rec = recorder()
+
+    drc.prune(
+        ScriptedPlanner([(1, 1), (2, 2)]),
+        SNAP,
+        None,
+        check_for({(2, 2)}),
+        max_rounds=4,
+        progress=rec.progress,
+    )
+
+    assert [(s.value, c) for s, c in rec.stages()] == [
+        ("plan", None),
+        ("drc", (1, 4)),
+        ("plan", None),
+        ("drc", (2, 4)),
+    ]
+
+
+def test_prune_stopped_during_a_drc_round_cancels_before_replanning(recorder):
+    rec = recorder()
+    planner = ScriptedPlanner([(1, 1), (2, 2)])
+    check = check_for({(2, 2)})
+
+    def stopping_check(plan):
+        rec.stopped = True
+        return check(plan)
+
+    with pytest.raises(Cancelled):
+        drc.prune(planner, SNAP, None, stopping_check, progress=rec.progress)
+
+    assert len(planner.calls) == 1
+
+
 def test_prune_skips_drc_for_an_empty_plan():
     def check(plan):
         raise AssertionError("DRC should not run")
@@ -754,3 +792,81 @@ def test_a_busy_kicad_is_not_taken_for_one_without_the_call(no_system_cli):
 
     with pytest.raises(ApiError):
         drc.locate_kicad_cli(None, FakeKiCad(error=busy))
+
+
+def drc_files(tmp_path):
+    (tmp_path / "b.kicad_pro").write_text("{}")
+    return drc.ProjectFiles(pro=tmp_path / "b.kicad_pro", dru=None)
+
+
+PID_CLI = """
+import os, pathlib, time
+pathlib.Path(os.environ["KISTITCH_TEST_PID"]).write_text(str(os.getpid()))
+time.sleep(60)
+"""
+
+
+def test_drc_runner_stopped_kills_kicad_cli_and_cancels(tmp_path, monkeypatch):
+    cli = make_executable(tmp_path / "kicad-cli", PID_CLI)
+    pid_file = tmp_path / "pid"
+    monkeypatch.setenv("KISTITCH_TEST_PID", str(pid_file))
+    work = tmp_path / "work"
+    work.mkdir()
+
+    runner = drc.DrcRunner(
+        cli, drc_files(tmp_path), BOARD_WITH_FONTS, work, Progress(stop=pid_file.exists)
+    )
+    started = time.monotonic()
+    with pytest.raises(Cancelled):
+        runner.new_violations(Plan(units=(unit(1, 2),)))
+
+    assert time.monotonic() - started < 10
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+    assert not list(work.glob("*.json"))
+
+
+def test_drc_runner_timeout_kills_kicad_cli(tmp_path, monkeypatch):
+    monkeypatch.setattr(drc, "DRC_TIMEOUT_S", 0.5)
+    cli = make_executable(tmp_path / "kicad-cli", PID_CLI)
+    pid_file = tmp_path / "pid"
+    monkeypatch.setenv("KISTITCH_TEST_PID", str(pid_file))
+
+    runner = drc.DrcRunner(cli, drc_files(tmp_path), BOARD_WITH_FONTS, tmp_path)
+    with pytest.raises(drc.DrcError, match="timed out"):
+        runner.new_violations(Plan(units=(unit(1, 2),)))
+
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+
+
+# Well past a pipe buffer (64 KiB on Linux and macOS) on both streams.
+CHATTY_CLI = """
+import json, pathlib, sys
+args = sys.argv[1:]
+for _ in range(2000):
+    sys.stdout.write("x" * 200 + "\\n")
+    sys.stderr.write("y" * 200 + "\\n")
+pathlib.Path(args[args.index("-o") + 1]).write_text(json.dumps({"violations": []}))
+"""
+
+
+def test_drc_runner_drains_output_larger_than_a_pipe_buffer(tmp_path, monkeypatch):
+    monkeypatch.setattr(drc, "DRC_TIMEOUT_S", 20)
+    cli = make_executable(tmp_path / "kicad-cli", CHATTY_CLI)
+
+    runner = drc.DrcRunner(cli, drc_files(tmp_path), BOARD_WITH_FONTS, tmp_path)
+
+    assert runner.new_violations(Plan(units=(unit(1, 2),))) == []
+
+
+def test_drc_failure_keeps_kicad_cli_stderr(tmp_path):
+    cli = make_executable(
+        tmp_path / "kicad-cli",
+        "import sys; sys.stderr.write('Failed to load board\\n'); sys.exit(3)",
+    )
+
+    runner = drc.DrcRunner(cli, drc_files(tmp_path), BOARD_WITH_FONTS, tmp_path)
+
+    with pytest.raises(drc.DrcError, match=r"\(3\): Failed to load board$"):
+        runner.new_violations(Plan(units=(unit(1, 2),)))

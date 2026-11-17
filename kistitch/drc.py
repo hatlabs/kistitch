@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -21,6 +22,7 @@ from loguru import logger
 from shapely.geometry import LineString, Point
 
 from kistitch.plan import Plan, PlannedUnit, Planner
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.snapshot import Point2, Snapshot, kicad_busy
 
 KICAD_CLI = "kicad-cli"
@@ -55,6 +57,8 @@ STARVED_THERMAL = "starved_thermal"
 THROUGH_VIA_LAYERS = ("F.Cu", "B.Cu")
 FONTS_MARKER = "\n\t(embedded_fonts"
 DRC_TIMEOUT_S = 900
+# How often a running DRC is asked whether to stop.
+DRC_POLL_S = 0.2
 VERSION_TIMEOUT_S = 30
 
 
@@ -322,8 +326,10 @@ class DrcRunner:
         project: ProjectFiles,
         board_text: str,
         workdir: Path,
+        progress: Progress = NO_PROGRESS,
     ):
         self._cli = kicad_cli
+        self._progress = progress
         self._project = project
         self._board_text = board_text
         self._workdir = workdir
@@ -349,17 +355,35 @@ class DrcRunner:
             str(out),
             str(pcb),
         ]
-        try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=DRC_TIMEOUT_S, check=False
-            )
-        except subprocess.TimeoutExpired:
-            raise DrcError(f"kicad-cli DRC timed out after {DRC_TIMEOUT_S} s") from None
-        if proc.returncode != 0 or not out.is_file():
-            raise DrcError(
-                f"kicad-cli DRC failed ({proc.returncode}): {proc.stderr.strip()}"
-            )
+        returncode, stderr = self._execute(cmd)
+        if returncode != 0 or not out.is_file():
+            raise DrcError(f"kicad-cli DRC failed ({returncode}): {stderr.strip()}")
         return parse_report(json.loads(out.read_text(encoding="utf-8")))
+
+    def _execute(self, cmd: Sequence[str]) -> tuple[int, str]:
+        """Run kicad-cli to its exit code and stderr, killing it at the time
+        limit or on a stop. Its output is drained while it runs, so a full
+        pipe can't stall it."""
+        deadline = time.monotonic() + DRC_TIMEOUT_S
+        with subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        ) as proc:
+            try:
+                while True:
+                    try:
+                        _, stderr = proc.communicate(timeout=DRC_POLL_S)
+                        return proc.returncode, stderr
+                    except subprocess.TimeoutExpired:
+                        pass
+                    self._progress.check()
+                    if time.monotonic() >= deadline:
+                        raise DrcError(
+                            f"kicad-cli DRC timed out after {DRC_TIMEOUT_S} s"
+                        )
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.communicate()
 
     def baseline(self) -> list[Violation]:
         if self._baseline is None:
@@ -487,19 +511,25 @@ def prune(
     check: Check,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     thermal_radius: float = DEFAULT_THERMAL_RADIUS,
+    progress: Progress = NO_PROGRESS,
 ) -> PruneResult:
     """Plan, verify, drop implicated units and re-plan with them forbidden.
 
     Stops after a round that drops nothing. At the round limit the units
-    still implicated are dropped without another DRC pass.
+    still implicated are dropped without another DRC pass. Each planning
+    pass and each DRC round is a stop point.
     """
     forbidden: list[Point2] = []
     dropped: list[DroppedUnit] = []
     rounds = 0
     while True:
         rounds += 1
+        progress.enter(Stage.PLAN)
         plan = planner(snapshot, options, list(forbidden))
-        found = check(plan) if plan.units else []
+        found: list[Violation] = []
+        if plan.units:
+            progress.enter(Stage.DRC, (rounds, max_rounds))
+            found = check(plan)
         attr = attribute(found, plan.units, thermal_radius, snapshot.layer_names)
         for j, vs in sorted(attr.dropped.items()):
             dropped.append(DroppedUnit(plan.units[j], tuple(vs)))
