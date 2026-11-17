@@ -360,16 +360,19 @@ class TestPanelCommand:
     def test_a_second_start_for_the_same_kicad_exits(self, app: QApplication) -> None:
         kicad = kicad_path()
         first = self.start(kicad)
+        panels = [first]
         try:
             assert self.listening(kicad, first)
 
             second = self.start(kicad)
+            panels.append(second)
 
             assert second.wait(self.START_S) == 0
             assert first.poll() is None
         finally:
-            first.kill()
-            first.wait()
+            for panel in panels:
+                panel.kill()
+                panel.wait()
             QLocalServer.removeServer(server_name(kicad, TOKEN))
 
     def test_a_start_for_another_kicad_opens_its_own(self, app: QApplication) -> None:
