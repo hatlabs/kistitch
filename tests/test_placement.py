@@ -547,6 +547,24 @@ def unconnected(*pads):
 BASE_UNCONNECTED = unconnected(("A", (1, 2)), ("B", (3, 4)))
 
 
+def test_non_connectivity_violation_on_a_split_net_is_not_counted(
+    saved_board, monkeypatch, log
+):
+    sliver = drc.Violation(
+        "copper_sliver",
+        "Copper sliver",
+        "warning",
+        (drc.ViolationItem("Zone [+3V3] on In1.Cu", (5, 6)),),
+    )
+    monkeypatch.setattr(drc, "DrcRunner", reporting([], [sliver, BASE_UNCONNECTED]))
+    _, kicad = saved_board
+
+    placement.run_placement(plan_at((1, 1)), None, placement.RunSettings("test"), kicad)
+
+    assert any("1 new connectivity violations on +3V3" in line for line in log)
+    assert not any("connectivity:" in line and "sliver" in line for line in log)
+
+
 def reporting(base, planned):
     class ReportRunner(FakeDrcRunner):
         def report(self, plan):
