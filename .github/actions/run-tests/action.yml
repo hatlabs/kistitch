@@ -1,0 +1,37 @@
+name: Run tests
+description: Lint and test kistitch
+
+runs:
+  using: composite
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      with:
+        python-version: '3.14'
+
+    # PySide6's Qt libraries and its offscreen platform, which the panel's
+    # widget tests run on, link these; the wheel bundles the rest but glib,
+    # which every runner image ships.
+    - name: Install Qt's system libraries
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q --no-install-recommends \
+          libdbus-1-3 libegl1 libfontconfig1 libfreetype6 libgl1 libx11-6 \
+          libxkbcommon0
+
+    # Fail on a uv.lock that no longer matches pyproject.toml.
+    - name: Install dependencies
+      shell: bash
+      env:
+        UV_LOCKED: '1'
+      run: ./run sync
+
+    - name: Lint
+      shell: bash
+      run: ./run lint
+
+    - name: Test
+      shell: bash
+      run: ./run test
