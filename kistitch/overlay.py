@@ -20,7 +20,12 @@ from pathlib import Path
 import kipy.board
 import kipy.board_types
 from kipy.geometry import Vector2
-from kipy.util.board_layer import canonical_name, layer_from_canonical_name
+from kipy.proto.board.board_types_pb2 import BoardLayer
+from kipy.util.board_layer import (
+    canonical_name,
+    is_copper_layer,
+    layer_from_canonical_name,
+)
 from loguru import logger
 
 from kistitch.commit import (
@@ -94,15 +99,34 @@ def layer_map(
     return dict(zip(copper_layers, overlay_layers))
 
 
+def is_overlay_layer(name: str) -> bool:
+    layer = layer_from_canonical_name(name)
+    return layer != BoardLayer.BL_UNKNOWN and not is_copper_layer(layer)
+
+
 def missing_layers(board: kipy.board.Board, layers: Sequence[str]) -> list[str]:
     enabled = {canonical_name(L) for L in board.get_enabled_layers()}
     return [L for L in layers if L not in enabled]
 
 
-def enable_hint(missing: Sequence[str]) -> str:
-    return (
-        f"Overlay layers not enabled on the board: {', '.join(missing)}. Enable them "
-        "in Board Setup → Board Editor Layers, or pass --overlay-layers"
+def enable_layers(board: kipy.board.Board, layers: Sequence[str]) -> None:
+    """Add `layers` to the board's enabled layers.
+
+    KiCad replaces the whole set and deletes the contents of any layer left
+    out, so every enabled non-copper layer is passed back unchanged.
+    """
+    kept = [L for L in board.get_enabled_layers() if not is_copper_layer(L)]
+    added = [layer_from_canonical_name(L) for L in layers]
+    enabled = board.set_enabled_layers(board.get_copper_layer_count(), kept + added)
+    still = [L for L in layers if layer_from_canonical_name(L) not in enabled]
+    if still:
+        raise OverlayLayersError(
+            f"KiCad did not enable the overlay layers {', '.join(still)}. Enable "
+            "them in Board Setup → Board Editor Layers, or pass --overlay-layers"
+        )
+    logger.info(
+        f"Enabled overlay layers {', '.join(layers)}; "
+        "this is not in KiCad's undo history"
     )
 
 
@@ -119,8 +143,16 @@ class OverlayLayersError(RuntimeError):
     pass
 
 
-def overlay_ready(board: kipy.board.Board, outputs: Outputs, dry_run: bool) -> bool:
-    """Whether overlays can go on the board; raises before any board change if not."""
+def prepare_overlay_layers(
+    board: kipy.board.Board, outputs: Outputs, dry_run: bool
+) -> bool:
+    """Whether overlays can go on the board, enabling missing overlay layers
+    unless `dry_run`.
+
+    Too few overlay layers for the copper count, or a name that is not a
+    non-copper layer, raises before any board change. If KiCad refuses to
+    enable a layer, the error comes after the enabled set was changed.
+    """
     count = board.get_copper_layer_count()
     if count > len(outputs.overlay_layers):
         raise OverlayLayersError(
@@ -128,13 +160,23 @@ def overlay_ready(board: kipy.board.Board, outputs: Outputs, dry_run: bool) -> b
             + ", ".join(outputs.overlay_layers)
         )
     needed = outputs.overlay_layers[:count]
+    invalid = [L for L in needed if not is_overlay_layer(L)]
+    if invalid:
+        raise OverlayLayersError(
+            f"{', '.join(invalid)} are not valid overlay layers; pass non-copper "
+            "layers such as User.1 to --overlay-layers"
+        )
     missing = missing_layers(board, needed)
     if not missing:
         return True
     if dry_run:
-        logger.warning(enable_hint(missing) + "; writing the PNGs only")
+        logger.warning(
+            f"Overlay layers not enabled on the board: {', '.join(missing)}. A run "
+            "without --dry-run enables them; writing the PNGs only"
+        )
         return False
-    raise OverlayLayersError(enable_hint(missing))
+    enable_layers(board, missing)
+    return True
 
 
 @dataclass(frozen=True)

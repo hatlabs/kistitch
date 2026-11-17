@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from kipy.geometry import Vector2
 from kipy.proto.board.board_types_pb2 import BoardLayer as BL
+from kipy.util.board_layer import is_copper_layer
 from shapely.geometry import box
 
 from kistitch import cli, drc, overlay, pourstitch_command, render
@@ -41,6 +42,11 @@ class Board:
         return 2
 
     def get_enabled_layers(self):
+        return self.enabled
+
+    def set_enabled_layers(self, copper_layer_count, layers):
+        self.calls.append(("set_enabled_layers", copper_layer_count, list(layers)))
+        self.enabled = [L for L in self.enabled if is_copper_layer(L)] + list(layers)
         return self.enabled
 
     def get_reference_images(self):
@@ -232,16 +238,16 @@ def test_check_without_outline_fails_before_the_refill(fakes):
     assert board.calls == []
 
 
-def test_disabled_overlay_layer_fails_before_any_board_change(fakes):
-    _, placements = fakes
+def test_disabled_overlay_layer_is_enabled_before_any_other_board_change(fakes):
+    created, _ = fakes
     board = Board(enabled=(BL.BL_User_1,))
     outputs = overlay.Outputs(overlay=True)
 
-    with pytest.raises(overlay.OverlayLayersError, match="User.2"):
-        pourstitch_command.execute(OPTIONS, outputs, kicad=KiCad(board))  # type: ignore[arg-type]
+    pourstitch_command.execute(OPTIONS, outputs, kicad=KiCad(board))  # type: ignore[arg-type]
 
-    assert placements == []
-    assert board.calls == []
+    assert board.calls[0] == ("set_enabled_layers", 2, [BL.BL_User_1, BL.BL_User_2])
+    assert ("push_commit", pourstitch_command.OVERLAY_COMMIT) in board.calls
+    assert len(created) == len(LAYERS)
 
 
 def test_disabled_overlay_layer_in_dry_run_keeps_the_pngs(fakes, png_dir, log):
