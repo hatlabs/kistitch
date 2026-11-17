@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -15,6 +15,7 @@ from loguru import logger
 from kistitch import drc
 from kistitch.commit import (
     REFILLS_OFF_MESSAGE,
+    CommitOutcome,
     Marker,
     MarkerKind,
     commit_units,
@@ -58,6 +59,21 @@ class BoardChangedError(RuntimeError):
 class RunResult:
     snapshot: Snapshot
     prune: drc.PruneResult
+    _: KW_ONLY
+    commit: CommitOutcome
+    # New connectivity violations on nets whose count rose: possible pour
+    # splits, committed with markers or, in a dry run, found.
+    splits: int = 0
+
+    @property
+    def placed(self) -> int:
+        """Vias known to have landed on the board."""
+        return len(self.prune.plan.units) if self.commit is CommitOutcome.LANDED else 0
+
+    @property
+    def unfixable(self) -> int:
+        """Spots left without a via, each counted once over its layers."""
+        return len({(s.position, s.net) for s in self.prune.plan.unfixable})
 
 
 def measure_only(
@@ -176,16 +192,16 @@ def run_placement(
 
     log_summary(settings.command, result, settings.mark_unfixable)
     markers = markers_for(result, settings.mark_unfixable)
-    _check_splits(result, settings, runner)
+    splits = _check_splits(result, settings, runner)
 
     if settings.dry_run:
         logger.info("Dry run: nothing committed")
-        return RunResult(snapshot, result)
+        return RunResult(snapshot, result, commit=CommitOutcome.NOTHING, splits=splits)
     # Each run's markers replace the previous run's, like overlays do.
     stale = marker_shapes(board.get_shapes())
     if not result.plan.units and not markers and not stale:
         logger.info("Nothing to commit")
-        return RunResult(snapshot, result)
+        return RunResult(snapshot, result, commit=CommitOutcome.NOTHING, splits=splits)
 
     # DRC can take minutes; an edit made meanwhile was never verified.
     if board.get_as_string() != verified_text:
@@ -197,7 +213,7 @@ def run_placement(
                 else ""
             )
         )
-    commit_units(
+    outcome = commit_units(
         kicad,
         board,
         settings.command,
@@ -206,13 +222,14 @@ def run_placement(
         stale,
         refill=settings.refill,
     )
-    return RunResult(snapshot, result)
+    return RunResult(snapshot, result, commit=outcome, splits=splits)
 
 
 def _check_splits(
     result: drc.PruneResult, settings: RunSettings, runner: drc.DrcRunner
-) -> None:
-    """Refuse to commit a plan that disconnects copper, if splits aren't allowed.
+) -> int:
+    """Refuse to commit a plan that disconnects copper, if splits aren't allowed;
+    returns the number of splits otherwise.
 
     Other nets' pours are not obstacles, so one via can cut a narrow neck
     of a pour. DRC then names the pour's pads or zones, never the via, and
@@ -221,7 +238,7 @@ def _check_splits(
     """
     connectivity = [v for v in result.unattributed if v.type in drc.CONNECTIVITY_TYPES]
     if not connectivity:
-        return
+        return 0
     rising = drc.rising_connectivity_nets(runner.baseline(), runner.planned)
     splits = [v for v in connectivity if drc.violation_nets(v) & rising]
     level = "WARNING" if settings.allow_splits else "ERROR"
@@ -233,7 +250,7 @@ def _check_splits(
                 f"  connectivity violation moved, count on its net unchanged: {v}"
             )
     if not splits:
-        return
+        return 0
     nets = ", ".join(
         sorted({n for v in splits for n in drc.violation_nets(v)} & rising)
     )
@@ -251,3 +268,4 @@ def _check_splits(
             f"{message}. Nothing committed; fix the board or rerun without "
             "--no-allow-splits to commit with markers"
         )
+    return len(splits)

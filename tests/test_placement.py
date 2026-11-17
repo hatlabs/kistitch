@@ -17,7 +17,7 @@ from kipy.proto.common.types import DocumentSpecifier
 from loguru import logger
 
 from kistitch import commit, drc, placement
-from kistitch.commit import Marker, MarkerKind
+from kistitch.commit import CommitOutcome, Marker, MarkerKind
 from kistitch.plan import Plan, PlannedUnit, Stub, UnfixableSpot
 from kistitch.returnpath import NoBoardOutlineError
 from kistitch.snapshot import NM_PER_MM, Snapshot, ViaSize
@@ -312,6 +312,9 @@ def test_run_commits_the_pruned_units_in_one_commit(saved_board):
     assert board.calls.count("begin_commit") == 1 and len(pushes(board)) == 1
     (placed,) = board.created
     assert [(v.position.x, v.position.y) for v in placed] == [(1_000_000, 1_000_000)]
+    assert result.commit is CommitOutcome.LANDED
+    assert result.placed == 1
+    assert result.splits == 0
 
 
 def test_dry_run_commits_nothing(saved_board):
@@ -324,13 +327,15 @@ def test_dry_run_commits_nothing(saved_board):
     assert [u.position for u in result.prune.plan.units] == [(1, 1)]
     assert "begin_commit" not in board.calls and pushes(board) == []
     assert board.created == []
+    assert result.commit is CommitOutcome.NOTHING
+    assert result.placed == 0
 
 
 def test_empty_plan_without_markers_commits_nothing(saved_board):
     board, kicad = saved_board
     unfixable = (UnfixableSpot((3, 3), "GND", "no room"),)
 
-    placement.run_placement(
+    result = placement.run_placement(
         plan_at(unfixable=unfixable),
         None,
         placement.RunSettings("test", mark_unfixable=False),
@@ -338,6 +343,28 @@ def test_empty_plan_without_markers_commits_nothing(saved_board):
     )
 
     assert "begin_commit" not in board.calls and pushes(board) == []
+    assert result.commit is CommitOutcome.NOTHING
+    assert result.placed == 0
+
+
+def test_run_whose_push_loses_the_connection_reports_an_unknown_outcome(
+    saved_board,
+):
+    board, kicad = saved_board
+
+    def lost(c, message=""):
+        board.calls.append(("push_commit", message))
+        raise ConnectionError("timed out")
+
+    board.push_commit = lost
+
+    result = placement.run_placement(
+        plan_at((1, 1)), None, placement.RunSettings("test"), kicad
+    )
+
+    assert result.commit is CommitOutcome.UNKNOWN
+    assert result.placed == 0
+    assert board.calls.count("refill_zones") == 1  # before the snapshot only
 
 
 def eco2_cross():
@@ -502,6 +529,7 @@ def test_split_commits_with_a_marker_at_the_split_by_default(
         Marker((20, 20), MarkerKind.UNATTRIBUTED),
     )
     assert commit.MARKER_LAYER in board.visible
+    assert result.splits == 1
 
 
 @pytest.mark.parametrize(
@@ -599,6 +627,56 @@ def test_existing_unconnected_item_that_moved_is_not_a_split(saved_board, monkey
     )
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_splits_count_only_new_connectivity_violations_among_the_markers(
+    saved_board, monkeypatch, dry_run
+):
+    moved = unconnected(("C", (7, 8)), ("D", (9, 10)))
+    split = drc.Violation(
+        "isolated_copper",
+        "split",
+        "error",
+        (drc.ViolationItem("Zone [+5V] on In2.Cu", (11, 12)),),
+    )
+    sliver = drc.Violation(
+        "copper_sliver",
+        "Copper sliver",
+        "warning",
+        (drc.ViolationItem("Zone [GND] on In1.Cu", (5, 6)),),
+    )
+    monkeypatch.setattr(
+        drc, "DrcRunner", reporting([BASE_UNCONNECTED], [moved, split, sliver])
+    )
+    _, kicad = saved_board
+    unfixable = (UnfixableSpot((3, 3), "GND", "no room"),)
+
+    result = placement.run_placement(
+        plan_at((1, 1), unfixable=unfixable),
+        None,
+        placement.RunSettings("test", dry_run=dry_run),
+        kicad,
+    )
+
+    assert len(placement.markers_for(result.prune)) == 4
+    assert result.splits == 1
+
+
+def test_unfixable_counts_each_spot_once_over_its_layers():
+    spots = (
+        UnfixableSpot((3, 3), "GND", "no room", "F.Cu"),
+        UnfixableSpot((3, 3), "GND", "no room", "B.Cu"),
+        UnfixableSpot((3, 3), "+3.3V", "no room"),
+        UnfixableSpot((4, 4), "GND", "no room"),
+    )
+    prune = drc.PruneResult(Plan(unfixable=spots), (), (), (), 1)
+
+    result = placement.RunResult(
+        Snapshot(copper_layers=("F.Cu",)), prune, commit=CommitOutcome.NOTHING
+    )
+
+    assert result.unfixable == 3
+
+
 def test_second_unconnected_item_on_the_same_net_is_a_split(saved_board, monkeypatch):
     extra = unconnected(("C", (7, 8)), ("D", (9, 10)))
     monkeypatch.setattr(
@@ -634,7 +712,7 @@ def test_commit_creates_items_and_markers_in_one_commit():
     (push,) = pushes(board)
     assert push[1].startswith("kistitch pourstitch ")
     assert board.calls.count("begin_commit") == 1
-    assert created == 3
+    assert created is CommitOutcome.LANDED
 
 
 def test_unit_items_make_one_track_per_stub_leg():
@@ -694,13 +772,23 @@ def test_push_timeout_keeps_the_commit_and_warns(log):
     # The commit may have landed: dropping it then would be wrong.
     board = PushFailingBoard(ConnectionError("timed out"))
 
-    commit.commit_units(FakeKiCad(board), board, "x", [unit(1, 1)], [])  # type: ignore[arg-type]
+    outcome = commit.commit_units(FakeKiCad(board), board, "x", [unit(1, 1)], [])  # type: ignore[arg-type]
 
+    assert outcome is CommitOutcome.UNKNOWN
     assert "drop_commit" not in board.calls
     assert any(
         line.startswith("WARNING") and "lost the connection" in line and "undo" in line
         for line in log
     )
+
+
+def test_push_timeout_skips_the_refill_after_the_commit():
+    # A lost connection would leave the refill waiting out its deadline.
+    board = PushFailingBoard(ConnectionError("timed out"))
+
+    commit.commit_units(FakeKiCad(board), board, "x", [unit(1, 1)], [])  # type: ignore[arg-type]
+
+    assert "refill_zones" not in board.calls
 
 
 def test_push_refused_by_kicad_drops_the_commit_and_raises():
@@ -800,7 +888,7 @@ def test_failing_to_show_the_marker_layer_after_the_commit_only_warns(log, error
         [Marker((9, 9), MarkerKind.UNFIXABLE)],
     )
 
-    assert created == 1
+    assert created is CommitOutcome.LANDED
     assert len(pushes(board)) == 1
     assert any(
         line.startswith("WARNING") and "Eco2" in line and "visible" in line
@@ -830,7 +918,7 @@ def test_failing_to_set_the_visible_layers_after_the_commit_only_warns(log, erro
         [Marker((9, 9), MarkerKind.UNFIXABLE)],
     )
 
-    assert created == 1
+    assert created is CommitOutcome.LANDED
     assert len(pushes(board)) == 1
     assert "drop_commit" not in board.calls
     assert any(

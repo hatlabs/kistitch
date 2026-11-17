@@ -47,6 +47,13 @@ REFILLS_OFF_MESSAGE = (
 COMMIT_PREFIX = "kistitch"
 
 
+class CommitOutcome(enum.Enum):
+    LANDED = "landed"
+    NOTHING = "nothing to commit"
+    # The push lost the connection to KiCad; the commit may have landed.
+    UNKNOWN = "unknown"
+
+
 class MarkerKind(enum.Enum):
     UNFIXABLE = "unfixable"
     UNATTRIBUTED = "unattributed"
@@ -195,11 +202,10 @@ def commit_units(
     markers: Sequence[Marker],
     stale: Sequence[kipy.board_types.BoardShape] = (),
     refill: bool = True,
-) -> int:
+) -> CommitOutcome:
     """Remove the stale markers and create the units plus the new Eco2 markers
-    as one commit, then refill the zones if `refill`.
-
-    Returns the number of placed vias and tracks.
+    as one commit, then refill the zones if `refill` and the commit is known
+    to have landed.
     """
     nets = {n.name: n for n in board.get_nets()}
     missing = sorted({u.net for u in units} - nets.keys())
@@ -215,7 +221,8 @@ def commit_units(
     try:
         if stale:
             board.remove_items(stale)
-        created = create_checked(board, placed) if placed else []
+        if placed:
+            create_checked(board, placed)
         if markers:
             create_checked(board, marker_items(markers))
     except BaseException:
@@ -223,18 +230,18 @@ def commit_units(
         raise
 
     # Outside the try above: once pushed, the commit can't be dropped.
-    if push_tolerant(board, commit, label):
-        logger.info(
-            f"Committed {len(units)} vias as '{label}'"
-            + (f" and {len(markers)} markers on User.Eco2" if markers else "")
-            + (f", replacing {len(stale)} earlier marker shapes" if stale else "")
-        )
-        if markers:
-            show_layers(board, [MARKER_LAYER])
-
+    if not push_tolerant(board, commit, label):
+        return CommitOutcome.UNKNOWN
+    logger.info(
+        f"Committed {len(units)} vias as '{label}'"
+        + (f" and {len(markers)} markers on User.Eco2" if markers else "")
+        + (f", replacing {len(stale)} earlier marker shapes" if stale else "")
+    )
+    if markers:
+        show_layers(board, [MARKER_LAYER])
     if refill:
         refill_after_commit(kicad, board)
-    return len(created)
+    return CommitOutcome.LANDED
 
 
 def show_layers(

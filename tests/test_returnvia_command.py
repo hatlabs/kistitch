@@ -16,6 +16,7 @@ from shapely.ops import unary_union
 from kistitch import cli, drc, overlay, pourstitch_command, render, returnvia_command
 from kistitch.commit import (
     MARKER_LAYER,
+    CommitOutcome,
     Marker,
     MarkerKind,
     eco2_segment,
@@ -195,7 +196,9 @@ def fakes(monkeypatch):
     def fake_run(planner, options, settings, kicad):
         f.planned.append(settings)
         plan = f.plan or planner(f.snap, options, [])
-        return RunResult(f.snap, drc.PruneResult(plan, (), (), (), 1))
+        return RunResult(
+            f.snap, drc.PruneResult(plan, (), (), (), 1), commit=CommitOutcome.LANDED
+        )
 
     monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda board: f.snap))
     monkeypatch.setattr(

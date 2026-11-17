@@ -9,7 +9,12 @@ from kipy.util.board_layer import is_copper_layer
 from shapely.geometry import box
 
 from kistitch import cli, drc, overlay, pourstitch_command, render
-from kistitch.commit import MARKER_LAYER, REFILLS_OFF_MESSAGE, eco2_segment
+from kistitch.commit import (
+    MARKER_LAYER,
+    REFILLS_OFF_MESSAGE,
+    CommitOutcome,
+    eco2_segment,
+)
 from kistitch.placement import RunResult, RunSettings
 from kistitch.plan import POURSTITCH_POWER_DISTANCE, StitchClass
 from kistitch.pourstitch import Options
@@ -107,7 +112,9 @@ def fakes(monkeypatch):
         placements.append(settings)
         planned = Snapshot.from_board(kicad.get_board())
         plan = planner(planned, options, [])
-        return RunResult(planned, drc.PruneResult(plan, (), (), (), 1))
+        return RunResult(
+            planned, drc.PruneResult(plan, (), (), (), 1), commit=CommitOutcome.LANDED
+        )
 
     monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda board: snap))
     monkeypatch.setattr(
