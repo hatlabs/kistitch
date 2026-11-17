@@ -53,6 +53,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.sdist]
 exclude = ["docs/images"]
 
+[tool.ruff]
+# The KiCad plugin's launcher runs in KiCad's Python, 3.9 on macOS.
+per-file-target-version = { "pcm/**" = "py39" }
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Parallel by default; pass `-n 0` to run serially (e.g. for pdb).

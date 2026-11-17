@@ -1,0 +1,21 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "io.github.hatlabs.kistitch",
+  "name": "kistitch",
+  "description": "Place DRC-checked stitching vias and show return and coverage heatmaps",
+  "runtime": {
+    "type": "python"
+  },
+  "actions": [
+    {
+      "identifier": "open-panel",
+      "name": "kistitch",
+      "description": "Open the kistitch panel, installing kistitch first if needed",
+      "show-button": true,
+      "scopes": ["pcb"],
+      "entrypoint": "kistitch_launcher.py",
+      "icons-light": ["icon-light-24.png", "icon-light-48.png"],
+      "icons-dark": ["icon-dark-24.png", "icon-dark-48.png"]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v2",
+  "name": "kistitch",
+  "description": "Place DRC-checked return, pad and pour stitching vias, and show return and coverage heatmaps.",
+  "description_full": "kistitch places ground return vias, pad stitching vias and pour stitching vias on the board open in the PCB editor. Every run is checked with KiCad's own DRC before anything is committed, and lands as one undoable step. Its heatmaps show return distance and pour coverage on the board, for checking a layout and placing vias by hand.\n\nThe kistitch button in the PCB editor's toolbar opens the kistitch panel, which runs those steps on the open board, one action at a time. kistitch runs outside KiCad, so the first press offers to install uv and kistitch, and installs nothing until you agree. That needs an internet connection. Later presses open the panel or bring it to the front.\n\nkistitch needs KiCad's API server: Preferences > Plugins > Enable KiCad API.",
+  "identifier": "io.github.hatlabs.kistitch",
+  "type": "plugin",
+  "author": {
+    "name": "Hat Labs Oy",
+    "contact": {
+      "github": "https://github.com/hatlabs"
+    }
+  },
+  "license": "MIT",
+  "resources": {
+    "homepage": "https://github.com/hatlabs/kistitch"
+  },
+  "tags": ["pcb", "vias"]
+}
