@@ -3,16 +3,30 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import kipy
 import kipy.board
 from loguru import logger
 
 from kistitch import overlay, render
-from kistitch.placement import RunSettings, check_outline, measure_only, run_placement
+from kistitch.placement import (
+    RunResult,
+    RunSettings,
+    check_outline,
+    measure_only,
+    run_placement,
+)
 from kistitch.plan import Plan
-from kistitch.pourstitch import Options, PourStitcher, summarise
-from kistitch.raster import CoverageMap, Grid
+from kistitch.pourstitch import (
+    LayerCoverage,
+    NetCoverage,
+    Options,
+    PourStitcher,
+    by_net,
+    summarise,
+)
+from kistitch.raster import CoverageMap
 from kistitch.snapshot import Snapshot
 
 COMMAND = "pourstitch"
@@ -34,15 +48,29 @@ STYLE = render.HeatmapStyle(
 )
 
 
+@dataclass(frozen=True, kw_only=True)
+class StitchResult:
+    """The coverage after the run at `distance`, with the placement unless
+    the run only measured.
+
+    After a placement the coverage is of the planned board: it holds once
+    the placement landed (`placement.commit`).
+    """
+
+    distance: float
+    coverage: tuple[NetCoverage, ...]
+    placement: RunResult | None
+    layers_enabled: tuple[str, ...]
+
+
 def _log_coverage(
     stitcher: PourStitcher,
     snapshot: Snapshot,
     options: Options,
-    maps: Sequence[CoverageMap],
-    grid: Grid,
+    coverage: Sequence[LayerCoverage],
 ) -> None:
     counts = stitcher.stitch_counts(snapshot, options)
-    for c in summarise(maps, options.max_distance, grid.pixel):
+    for c in coverage:
         unstitchable = (
             f"; {c.unstitchable_mm2:.2f} mm² can't be stitched (no two-layer spot within reach)"
             if c.unstitchable_mm2
@@ -86,7 +114,7 @@ def execute(
     allow_splits: bool = True,
     refill: bool = True,
     kicad: kipy.KiCad | None = None,
-) -> None:
+) -> StitchResult:
     """Run pourstitch against the open board.
 
     `check` only measures the existing stitching: no planning, no kicad-cli,
@@ -100,6 +128,7 @@ def execute(
     layers = overlay.prepare_overlay_layers(board, outputs, dry_run)
 
     stitcher = PourStitcher()
+    result: RunResult | None = None
     if check:
         snapshot, plan = measure_only(kicad, board, refill)
     else:
@@ -120,8 +149,9 @@ def execute(
 
     grid = stitcher.grid(snapshot, options)
     maps = stitcher.coverage(snapshot, options, plan.units)
+    coverage = summarise(maps, options.max_distance, grid.pixel)
     logger.info(f"{COMMAND} coverage" + (" (check only)" if check else ""))
-    _log_coverage(stitcher, snapshot, options, maps, grid)
+    _log_coverage(stitcher, snapshot, options, coverage)
 
     if outputs.render is not None:
         if maps:
@@ -161,3 +191,9 @@ def execute(
             OVERLAY_COMMIT,
             () if check else None,
         )
+    return StitchResult(
+        distance=options.max_distance,
+        coverage=by_net(coverage),
+        placement=result,
+        layers_enabled=layers.enabled,
+    )

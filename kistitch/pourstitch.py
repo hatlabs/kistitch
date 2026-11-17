@@ -590,3 +590,20 @@ def summarise(
         unstitchable = int(np.sum(m.excluded)) * area
         out.append(LayerCoverage(m.net, m.layer, n, n * area, unstitchable))
     return out
+
+
+@dataclass(frozen=True)
+class NetCoverage:
+    net: str
+    uncovered_mm2: float
+    unstitchable_mm2: float
+
+
+def by_net(layers: Sequence[LayerCoverage]) -> tuple[NetCoverage, ...]:
+    """Each net's coverage over all its layers, nets in first-seen order."""
+    uncovered: dict[str, float] = {}
+    unstitchable: dict[str, float] = {}
+    for c in layers:
+        uncovered[c.net] = uncovered.get(c.net, 0.0) + c.uncovered_mm2
+        unstitchable[c.net] = unstitchable.get(c.net, 0.0) + c.unstitchable_mm2
+    return tuple(NetCoverage(n, uncovered[n], unstitchable[n]) for n in uncovered)

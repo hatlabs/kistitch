@@ -17,7 +17,7 @@ from kistitch.commit import (
 )
 from kistitch.placement import RunResult, RunSettings
 from kistitch.plan import POURSTITCH_POWER_DISTANCE, StitchClass
-from kistitch.pourstitch import Options
+from kistitch.pourstitch import NetCoverage, Options
 from kistitch.snapshot import NM_PER_MM, NoBoardOutlineError, Snapshot, ViaSize, Zone
 
 LAYERS = ("F.Cu", "B.Cu")
@@ -147,6 +147,39 @@ def test_check_reports_whole_unstitched_pour_and_commits_nothing(fakes, log):
     assert all("0 existing stitches" in line for line in reports)
 
 
+def test_check_returns_the_uncovered_area_per_net(fakes):
+    board = Board()
+
+    result = pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(),
+        check=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
+
+    assert result.placement is None
+    assert result.distance == OPTIONS.max_distance
+    (gnd,) = result.coverage
+    assert gnd == NetCoverage("GND", pytest.approx(len(LAYERS) * POUR_MM2), 0.0)
+    assert result.layers_enabled == ()
+
+
+def test_place_returns_the_placement_and_the_area_left_uncovered(fakes):
+    board = Board()
+
+    result = pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(),
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
+
+    assert result.placement is not None
+    assert result.placement.commit is CommitOutcome.LANDED
+    assert result.placement.placed > 0
+    (gnd,) = result.coverage
+    assert gnd.uncovered_mm2 < len(LAYERS) * POUR_MM2
+
+
 def test_check_without_refills_uses_the_fills_as_they_are(fakes, log):
     board = Board()
 
@@ -272,11 +305,12 @@ def test_disabled_overlay_layer_is_enabled_before_any_other_board_change(fakes):
     board = Board(enabled=(BL.BL_User_1,))
     outputs = overlay.Outputs(overlay=True)
 
-    pourstitch_command.execute(OPTIONS, outputs, kicad=KiCad(board))  # type: ignore[arg-type]
+    result = pourstitch_command.execute(OPTIONS, outputs, kicad=KiCad(board))  # type: ignore[arg-type]
 
     assert board.calls[0] == ("set_enabled_layers", 2, [BL.BL_User_1, BL.BL_User_2])
     assert ("push_commit", pourstitch_command.OVERLAY_COMMIT) in board.calls
     assert len(created) == len(LAYERS)
+    assert result.layers_enabled == ("User.2",)
 
 
 def test_disabled_overlay_layer_in_dry_run_keeps_the_pngs(fakes, png_dir, log):

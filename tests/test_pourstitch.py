@@ -17,9 +17,12 @@ from kistitch.plan import (
 )
 from kistitch.pourstitch import (
     QUANTISATION,
+    LayerCoverage,
+    NetCoverage,
     Options,
     OtherClassNetsError,
     PourStitcher,
+    by_net,
     lattice_sites,
     summarise,
 )
@@ -632,3 +635,16 @@ def test_power_run_on_a_ground_only_board_stitches_nothing(log):
 
     assert plan.units == ()
     assert any("power nets" in m and m.rstrip().endswith(": none") for m in log)
+
+
+def test_by_net_adds_up_each_nets_layers_in_net_order():
+    layers = [
+        LayerCoverage("GND", "F.Cu", 4, 1.0, 0.5),
+        LayerCoverage("+5V", "F.Cu", 0, 0.0, 0.0),
+        LayerCoverage("GND", "B.Cu", 8, 2.0, 0.25),
+    ]
+
+    assert by_net(layers) == (
+        NetCoverage("GND", 3.0, 0.75),
+        NetCoverage("+5V", 0.0, 0.0),
+    )
