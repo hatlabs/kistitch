@@ -13,7 +13,7 @@ from loguru import logger
 import kistitch.overlay
 from kistitch import clear_command, clearvias
 from kistitch.overlay import DEFAULT_OVERLAY_LAYERS
-from kistitch.padvia import PadviaOptions, plan_padvia
+from kistitch.padvia import PadviaOptions, PadviaPlanner
 from kistitch.placement import (
     BoardChangedError,
     RunSettings,
@@ -330,7 +330,7 @@ def execute_padvia(args):
         refill=args.refill,
     )
     with _exit_on(*PLACEMENT_ERRORS):
-        run_placement(plan_padvia, options, settings)
+        run_placement(PadviaPlanner(), options, settings)
 
 
 def execute_pourstitch(args):
