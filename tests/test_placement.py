@@ -496,21 +496,32 @@ def test_split_commits_with_a_marker_at_the_split_by_default(
 
 
 @pytest.mark.parametrize(
-    "allow_splits, outcome",
-    [(True, "would commit with markers"), (False, "would refuse to commit")],
+    "allow_splits, outcome, level",
+    [
+        (True, "would commit with markers", "WARNING"),
+        (False, "would refuse to commit", "ERROR"),
+    ],
 )
 def test_dry_run_reports_a_split_without_failing(
-    saved_board, monkeypatch, log, allow_splits, outcome
+    saved_board, monkeypatch, allow_splits, outcome, level
 ):
     monkeypatch.setattr(drc, "DrcRunner", split_runner("unconnected_items"))
     board, kicad = saved_board
     settings = placement.RunSettings("test", dry_run=True, allow_splits=allow_splits)
-
-    result = placement.run_placement(plan_at((1, 1)), None, settings, kicad)
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(str(m)), format="{level.name} {message}")
+    try:
+        result = placement.run_placement(plan_at((1, 1)), None, settings, kicad)
+    finally:
+        logger.remove(sink)
 
     assert [v.type for v in result.prune.unattributed] == ["unconnected_items"]
     assert "begin_commit" not in board.calls
-    assert any(f"a real run {outcome}" in line for line in log)
+    assert any(
+        line.startswith(f"{level} ") and f"a real run {outcome}" in line
+        for line in lines
+    )
+    assert any(line.startswith(f"{level}   connectivity:") for line in lines)
 
 
 def test_unattributed_non_connectivity_violation_still_commits(
@@ -519,7 +530,7 @@ def test_unattributed_non_connectivity_violation_still_commits(
     monkeypatch.setattr(drc, "DrcRunner", split_runner("copper_sliver"))
     board, kicad = saved_board
 
-    placement.run_placement(plan_at((1, 1)), None, placement.RunSettings("test"), kicad)
+    placement.run_placement(plan_at((1, 1)), None, NO_SPLITS, kicad)
 
     assert len(pushes(board)) == 1
 
@@ -552,9 +563,7 @@ def test_existing_unconnected_item_that_moved_is_not_a_split(saved_board, monkey
     monkeypatch.setattr(drc, "DrcRunner", reporting([BASE_UNCONNECTED], [moved]))
     board, kicad = saved_board
 
-    result = placement.run_placement(
-        plan_at((1, 1)), None, placement.RunSettings("test"), kicad
-    )
+    result = placement.run_placement(plan_at((1, 1)), None, NO_SPLITS, kicad)
 
     assert result.prune.unattributed == (moved,)
     assert len(pushes(board)) == 1
