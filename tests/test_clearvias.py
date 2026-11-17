@@ -5,9 +5,10 @@ import pytest
 from kipy.errors import ConnectionError as KiCadConnectionError
 from shapely.geometry import LineString, box
 
-from kistitch import cli
-from kistitch.clearvias import stitching_vias
-from kistitch.commit import REFILLS_OFF_MESSAGE, eco2_segment
+from kistitch import clear_command, clearvias, cli
+from kistitch.clearvias import RemovableVias, stitching_vias
+from kistitch.commit import REFILLS_OFF_MESSAGE, CommitOutcome, eco2_segment
+from kistitch.overlay import DEFAULT_OVERLAY_LAYERS
 from kistitch.snapshot import Pad, PadKind, Snapshot, Track, Via, Zone
 
 TWO_LAYERS = ("F.Cu", "B.Cu")
@@ -163,7 +164,7 @@ def clear(monkeypatch, snap, argv, **board_args):
         b.calls.append("snapshot")
         return snap
 
-    monkeypatch.setattr(cli.Snapshot, "from_board", staticmethod(from_board))
+    monkeypatch.setattr(clearvias.Snapshot, "from_board", staticmethod(from_board))
     monkeypatch.setattr(cli, "configure_logging", lambda: None)
     monkeypatch.setattr(sys, "argv", ["kistitch", *argv])
     cli.main()
@@ -182,6 +183,7 @@ def test_clear_vias_refills_selects_removes_in_one_commit_then_refills(
     assert board.calls == [
         "refill_zones",
         "snapshot",
+        "snapshot",
         "begin_commit",
         ("remove_items", [v.id for v in TWO_GND_ONE_POWER]),
         "push_commit",
@@ -197,14 +199,15 @@ def test_clear_vias_and_markers_go_in_one_remove(monkeypatch):
 
     board = clear(monkeypatch, snap, ["clear", "--vias"], shapes=[marker])
 
-    assert board.calls[2:5] == [
+    assert board.calls[3:6] == [
         "begin_commit",
         ("remove_items", ["marker", TWO_GND_ONE_POWER[0].id]),
         "push_commit",
     ]
 
 
-def test_clear_vias_still_refills_when_the_push_times_out(monkeypatch, log):
+def test_clear_vias_skips_the_refill_when_the_push_times_out(monkeypatch, log):
+    # A lost connection would leave the refill waiting out its deadline.
     board = clear(
         monkeypatch,
         snapshot(TWO_GND_ONE_POWER),
@@ -212,7 +215,8 @@ def test_clear_vias_still_refills_when_the_push_times_out(monkeypatch, log):
         push_error=KiCadConnectionError("timed out"),
     )
 
-    assert board.calls[-1] == "refill_zones"
+    assert board.calls[-1] == "push_commit"
+    assert board.calls.count("refill_zones") == 1  # before counting only
     assert any("it may have landed" in m for m in log)
 
 
@@ -307,6 +311,7 @@ def test_clear_vias_without_refills_only_removes(monkeypatch, log):
 
     assert board.calls == [
         "snapshot",
+        "snapshot",
         "begin_commit",
         ("remove_items", [v.id for v in TWO_GND_ONE_POWER]),
         "push_commit",
@@ -329,7 +334,7 @@ def test_clear_vias_dry_run_without_refills_does_not_refill(monkeypatch, log):
 def test_clear_vias_warns_and_goes_on_when_the_first_refill_is_unconfirmed(
     monkeypatch, log
 ):
-    monkeypatch.setattr(cli, "refill_tolerant", lambda kicad, board: False)
+    monkeypatch.setattr(clearvias, "refill_tolerant", lambda kicad, board: False)
 
     board = clear(monkeypatch, snapshot(TWO_GND_ONE_POWER), ["clear", "--vias"])
 
@@ -344,3 +349,137 @@ def test_clear_without_vias_does_not_mention_refills(monkeypatch, log):
 
     assert "push_commit" in board.calls
     assert not [m for m in log if REFILLS_OFF_MESSAGE in m]
+
+
+# ---- removal as a library ---------------------------------------------------------
+
+
+def library_board(monkeypatch, *snaps):
+    """A board whose successive reads give `snaps`; the last one repeats."""
+    board = ViaBoard([kipy_via(v.id) for v in snaps[0].vias])
+    reads = list(snaps)
+
+    def from_board(b):
+        b.calls.append("snapshot")
+        return reads.pop(0) if len(reads) > 1 else reads[0]
+
+    monkeypatch.setattr(clearvias.Snapshot, "from_board", staticmethod(from_board))
+    return board, FakeKiCad(board)
+
+
+def removed_ids(board):
+    return [ids for c in board.calls if c[0] == "remove_items" for ids in c[1]]
+
+
+def test_counting_reports_per_net_vias_and_unfilled_zones_and_changes_nothing(
+    monkeypatch,
+):
+    unfilled = Zone(
+        net="GND", layers=TWO_LAYERS, priority=0, outline=GND_AREA, fills={}
+    )
+    snap = snapshot(TWO_GND_ONE_POWER, zones=(*ZONES, unfilled))
+    board, kicad = library_board(monkeypatch, snap)
+
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+
+    assert found.counts == {"GND": 2, "+3.3V": 1}
+    assert found.unfilled_zones == {"GND": 1}
+    assert found.total == 3
+    assert board.calls == ["refill_zones", "snapshot"]
+
+
+def test_removal_removes_exactly_the_counted_vias(monkeypatch):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+
+    cleared = clear_command.clear(kicad, board, DEFAULT_OVERLAY_LAYERS, found)  # type: ignore[arg-type]
+
+    assert cleared == clear_command.Cleared(vias=3, commit=CommitOutcome.LANDED)
+    assert sorted(removed_ids(board)) == sorted(v.id for v in TWO_GND_ONE_POWER)
+    assert board.calls[-1] == "refill_zones"
+
+
+def test_removal_limited_to_one_net_leaves_the_other_nets_vias(monkeypatch):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    found = clearvias.find_removable_vias(kicad, board, ["GND"])  # type: ignore[arg-type]
+
+    cleared = clear_command.clear(kicad, board, DEFAULT_OVERLAY_LAYERS, found)  # type: ignore[arg-type]
+
+    assert found.counts == {"GND": 2}
+    assert cleared.vias == 2
+    assert removed_ids(board) == [v.id for v in TWO_GND_ONE_POWER[:2]]
+
+
+def test_counted_via_tied_down_before_removal_stays(monkeypatch):
+    tied = TWO_GND_ONE_POWER[0]
+    track = Track("t", "GND", "F.Cu", 0.2, LineString([(1, 5), tied.position]))
+    board, kicad = library_board(
+        monkeypatch,
+        snapshot(TWO_GND_ONE_POWER),
+        snapshot(TWO_GND_ONE_POWER, tracks=[track]),
+    )
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+
+    cleared = clear_command.clear(kicad, board, DEFAULT_OVERLAY_LAYERS, found)  # type: ignore[arg-type]
+
+    assert cleared.vias == 2
+    assert tied.id not in removed_ids(board)
+
+
+def test_via_added_after_counting_is_not_removed(monkeypatch):
+    late = via("GND", 12, 12)
+    board, kicad = library_board(
+        monkeypatch,
+        snapshot(TWO_GND_ONE_POWER),
+        snapshot([*TWO_GND_ONE_POWER, late]),
+    )
+    board.vias.append(kipy_via(late.id))
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+
+    cleared = clear_command.clear(kicad, board, DEFAULT_OVERLAY_LAYERS, found)  # type: ignore[arg-type]
+
+    assert cleared.vias == 3
+    assert late.id not in removed_ids(board)
+
+
+def test_removal_whose_push_loses_the_connection_reports_an_unknown_outcome(
+    monkeypatch,
+):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    board.push_error = KiCadConnectionError("timed out")
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+
+    cleared = clear_command.clear(kicad, board, DEFAULT_OVERLAY_LAYERS, found)  # type: ignore[arg-type]
+
+    # Like a placement, only a removal known to have landed counts.
+    assert cleared == clear_command.Cleared(vias=0, commit=CommitOutcome.UNKNOWN)
+
+
+def test_dry_run_removal_reports_nothing_removed(monkeypatch):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+
+    cleared = clear_command.clear(
+        kicad,  # type: ignore[arg-type]
+        board,  # type: ignore[arg-type]
+        DEFAULT_OVERLAY_LAYERS,
+        found,
+        dry_run=True,
+    )
+
+    assert cleared == clear_command.Cleared(vias=0, commit=CommitOutcome.NOTHING)
+    assert found.total == 3
+    assert sorted(removed_ids(board)) == sorted(v.id for v in TWO_GND_ONE_POWER)
+    assert board.calls[-1] == "drop_commit"
+
+
+def test_nothing_to_clear_reports_nothing(monkeypatch):
+    board, kicad = library_board(monkeypatch, snapshot(()))
+    found = clearvias.find_removable_vias(kicad, board)  # type: ignore[arg-type]
+
+    cleared = clear_command.clear(kicad, board, DEFAULT_OVERLAY_LAYERS, found)  # type: ignore[arg-type]
+
+    assert found == RemovableVias(
+        nets=None, counts={}, unfilled_zones={}, ids=frozenset()
+    )
+    assert cleared == clear_command.Cleared(vias=0, commit=CommitOutcome.NOTHING)

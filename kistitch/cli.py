@@ -1,8 +1,7 @@
 import argparse
 import os
 import sys
-from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -12,15 +11,7 @@ from kipy.errors import ApiError
 from loguru import logger
 
 import kistitch.overlay
-from kistitch.clearvias import stitching_vias
-from kistitch.commit import (
-    REFILLS_OFF_MESSAGE,
-    commit_label,
-    marker_shapes,
-    push_tolerant,
-    refill_after_commit,
-    refill_tolerant,
-)
+from kistitch import clear_command, clearvias
 from kistitch.overlay import DEFAULT_OVERLAY_LAYERS
 from kistitch.padvia import PadviaOptions, plan_padvia
 from kistitch.placement import (
@@ -38,11 +29,8 @@ from kistitch.plan import (
 from kistitch.returnvia import DEFAULT_DISTANCE, NoGroundNetsError, ReturnViaOptions
 from kistitch.snapshot import (
     NoBoardOutlineError,
-    Snapshot,
     ViaSize,
     kicad_busy,
-    outline_from_edge_paths,
-    read_edge_paths,
 )
 
 # Placement failures that leave the board untouched and need no traceback.
@@ -315,97 +303,19 @@ def parse_args():
 def execute_clear(args):
     kicad = kipy.KiCad()
     board = kicad.get_board()
-
-    shapes = board.get_shapes()
-    eco2_shapes = marker_shapes(shapes)
-    outline = outline_from_edge_paths(read_edge_paths(shapes))
-    images = (
-        []
-        if outline.is_empty
-        else kistitch.overlay.overlays_on(
-            board,
-            args.overlay_layers,
-            kistitch.overlay.board_placement(outline.bounds),
-        )
-    )
-
-    refilled = False
-    if args.vias:
-        # Stitching vias are picked by the fills they touch, so stale fills
-        # would pick the wrong ones.
-        if not args.refill:
-            logger.info(REFILLS_OFF_MESSAGE)
-        elif refill_tolerant(kicad, board):
-            refilled = True
-        else:
-            logger.warning("Zone refill not confirmed; fills may be stale")
     vias = (
-        _find_and_log_stitching_vias(board, args.nets, args.dry_run, refilled)
+        clearvias.find_removable_vias(kicad, board, args.nets, args.refill)
         if args.vias
-        else []
+        else None
     )
-
-    if not eco2_shapes and not images and not vias:
-        logger.info("Nothing to clear")
-        return
-
-    commit = board.begin_commit()
-    board.remove_items([*eco2_shapes, *images, *vias])
-    if args.dry_run:
-        board.drop_commit(commit)
-        return
-    push_tolerant(board, commit, commit_label("clear"))
-    if vias and args.refill:
-        # Close the fills over the holes the removed vias leave.
-        refill_after_commit(kicad, board)
-
-
-def _find_and_log_stitching_vias(
-    board: kipy.board.Board,
-    nets: Sequence[str] | None,
-    dry_run: bool,
-    refilled: bool,
-) -> list[kipy.board_types.Via]:
-    snapshot = Snapshot.from_board(board)
-    _warn_unclearable_nets(snapshot, nets, refilled)
-    found = stitching_vias(snapshot, nets)
-    if found:
-        counts = Counter(v.net for v in found)
-        logger.info(
-            f"{'Would remove' if dry_run else 'Removing'} stitching vias: "
-            + ", ".join(f"{n} on {net}" for net, n in counts.items())
-        )
-    ids = {v.id for v in found}
-    return [v for v in board.get_vias() if v.id.value in ids]
-
-
-def _warn_unclearable_nets(
-    snapshot: Snapshot, nets: Sequence[str] | None, refilled: bool
-) -> None:
-    """Warn about selected nets whose vias can't be judged by their fills.
-
-    After a confirmed refill an empty zone fills to nothing, so asking for
-    another refill would only repeat it.
-    """
-    zoned = {z.net for z in snapshot.copper_zones}
-    selected = zoned if nets is None else set(nets)
-    for net in sorted(selected - zoned):
-        logger.warning(f"No copper zone on net {net}; it has no vias to clear")
-    unfilled = Counter(
-        z.net for z in snapshot.copper_zones if z.net in selected and not z.fills
+    clear_command.clear(
+        kicad,
+        board,
+        args.overlay_layers,
+        vias,
+        refill=args.refill,
+        dry_run=args.dry_run,
     )
-    for net, n in sorted(unfilled.items()):
-        zones = f"{n} zone{'s' if n > 1 else ''} of {net} {'have' if n > 1 else 'has'}"
-        them = "them" if n > 1 else "it"
-        if refilled:
-            logger.warning(
-                f"{zones} no fill after the refill, so vias that touch only {them} stay"
-            )
-        else:
-            logger.warning(
-                f"{zones} no fill, so vias that touch only {them} stay; press B "
-                "in KiCad to refill zones and run again"
-            )
 
 
 def execute_padvia(args):
