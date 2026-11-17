@@ -19,6 +19,7 @@ from kistitch.commit import (
     marker_shapes,
     push_tolerant,
     refill_after_commit,
+    refill_tolerant,
 )
 from kistitch.overlay import DEFAULT_OVERLAY_LAYERS
 from kistitch.padvia import PadviaOptions, plan_padvia
@@ -216,9 +217,9 @@ def parse_args():
         "--refill",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Refill the zones before measuring or placing, after committing "
-        "and after clear --vias (on by default). Each refill adds an undo step "
-        "in KiCad; with --no-refill, the fills are used as they are",
+        help="Refill the zones before measuring or placing, after committing, "
+        "and before and after clear --vias (on by default). Each refill adds "
+        "an undo step in KiCad; with --no-refill, the fills are used as they are",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -328,8 +329,13 @@ def execute_clear(args, refill: bool = True):
         )
     )
 
-    if args.vias and not refill:
-        logger.info(REFILLS_OFF_MESSAGE)
+    if args.vias:
+        # Stitching vias are picked by the fills they touch, so stale fills
+        # would pick the wrong ones.
+        if not refill:
+            logger.info(REFILLS_OFF_MESSAGE)
+        elif not refill_tolerant(kicad, board):
+            logger.warning("Zone refill not confirmed; fills may be stale")
     vias = (
         _find_and_log_stitching_vias(board, args.nets, args.dry_run)
         if args.vias
