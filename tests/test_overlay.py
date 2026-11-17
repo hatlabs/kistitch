@@ -847,3 +847,99 @@ def test_clear_removes_our_overlays_and_keeps_other_images(tmp_path, monkeypatch
     assert moved_breakneck in board.removed
     assert users_own not in board.removed
     assert any(getattr(s, "layer", None) == BL.BL_Eco2_User for s in board.removed)
+
+
+COPPER_4 = (BL.BL_F_Cu, BL.BL_In1_Cu, BL.BL_In2_Cu, BL.BL_B_Cu)
+
+
+class LayersBoard:
+    """Board with an enabled-layer set that `set_enabled_layers` replaces."""
+
+    def __init__(self, copper=COPPER_4, enabled=(), refuse=()):
+        self.copper = list(copper)
+        self.enabled = [*self.copper, *enabled]
+        self.refuse = set(refuse)
+        self.set_calls: list = []
+
+    def get_copper_layer_count(self):
+        return len(self.copper)
+
+    def get_enabled_layers(self):
+        return list(self.enabled)
+
+    def set_enabled_layers(self, copper_layer_count, layers):
+        self.set_calls.append((copper_layer_count, list(layers)))
+        self.enabled = [*self.copper, *(L for L in layers if L not in self.refuse)]
+        return list(self.enabled)
+
+
+def test_overlay_ready_enables_missing_layers_keeping_every_enabled_one(log):
+    kept = (BL.BL_F_SilkS, BL.BL_Edge_Cuts, BL.BL_User_2)
+    board = LayersBoard(enabled=kept)
+
+    ready = overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=False)  # type: ignore[arg-type]
+
+    assert ready
+    [(count, layers)] = board.set_calls
+    assert count == len(COPPER_4)
+    assert set(kept) <= set(layers)
+    assert {BL.BL_User_1, BL.BL_User_3, BL.BL_User_4} <= set(layers)
+    assert not set(COPPER_4) & set(layers)
+    [line] = [m for m in log if "Enabled" in m]
+    assert "User.1, User.3, User.4" in line
+    assert "undo" in line
+
+
+def test_overlay_ready_enables_only_the_layers_the_copper_count_needs():
+    board = LayersBoard(copper=(BL.BL_F_Cu, BL.BL_B_Cu), enabled=(BL.BL_F_SilkS,))
+
+    overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=False)  # type: ignore[arg-type]
+
+    [(count, layers)] = board.set_calls
+    assert count == 2
+    assert sorted(layers) == sorted([BL.BL_F_SilkS, BL.BL_User_1, BL.BL_User_2])
+
+
+def test_overlay_ready_leaves_the_layers_alone_when_all_are_enabled():
+    board = LayersBoard(
+        enabled=(BL.BL_User_1, BL.BL_User_2, BL.BL_User_3, BL.BL_User_4)
+    )
+
+    assert overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=False)  # type: ignore[arg-type]
+    assert board.set_calls == []
+
+
+def test_overlay_ready_in_dry_run_warns_without_enabling(log):
+    board = LayersBoard()
+
+    ready = overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=True)  # type: ignore[arg-type]
+
+    assert not ready
+    assert board.set_calls == []
+    assert any("User.1" in m and "PNGs only" in m for m in log)
+
+
+def test_overlay_ready_fails_when_kicad_does_not_enable_a_layer():
+    board = LayersBoard(refuse=(BL.BL_User_3,))
+
+    with pytest.raises(overlay.OverlayLayersError, match="User.3") as e:
+        overlay.overlay_ready(board, overlay.Outputs(overlay=True), dry_run=False)  # type: ignore[arg-type]
+
+    assert "User.1" not in str(e.value)
+
+
+@pytest.mark.parametrize("bad", ["User3", "In3.Cu"])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_overlay_ready_rejects_a_name_that_is_not_an_overlay_layer(bad, dry_run):
+    board = LayersBoard()
+    outputs = overlay.Outputs(
+        overlay=True, overlay_layers=("User.1", bad, "User.2", "User.4")
+    )
+
+    with pytest.raises(
+        overlay.OverlayLayersError, match="not valid overlay layers"
+    ) as e:
+        overlay.overlay_ready(board, outputs, dry_run=dry_run)  # type: ignore[arg-type]
+
+    assert str(e.value).startswith(f"{bad} are not valid overlay layers")
+    assert board.set_calls == []

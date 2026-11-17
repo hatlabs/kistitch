@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from kipy.proto.board.board_types_pb2 import BoardLayer as BL
+from kipy.util.board_layer import is_copper_layer
 from loguru import logger
 from PIL import Image
 from scipy import ndimage
@@ -124,6 +125,11 @@ class Board:
         return len(FOUR_LAYERS)
 
     def get_enabled_layers(self):
+        return self.enabled
+
+    def set_enabled_layers(self, copper_layer_count, layers):
+        self.calls.append(("set_enabled_layers", copper_layer_count, list(layers)))
+        self.enabled = [L for L in self.enabled if is_copper_layer(L)] + list(layers)
         return self.enabled
 
     def get_shapes(self):
@@ -1109,14 +1115,19 @@ def test_board_without_outline_fails_before_the_refill(fakes):
     assert board.calls == []
 
 
-def test_disabled_overlay_layer_fails_before_any_board_change(fakes):
+def test_disabled_overlay_layer_is_enabled_before_any_other_board_change(fakes):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
     board = Board(enabled=USER[:2])
 
-    with pytest.raises(overlay.OverlayLayersError, match="User.3"):
-        run(board, overlay=True, check=False)
+    run(board, overlay=True, full_map=True)
 
-    assert fakes.planned == []
-    assert board.calls == []
+    assert board.calls == [
+        ("set_enabled_layers", len(FOUR_LAYERS), list(USER)),
+        "refill_zones",
+        "begin_commit",
+        ("push_commit", returnvia_command.OVERLAY_COMMIT),
+    ]
+    assert sorted(i.layer for i in fakes.created) == [BL.BL_User_1, BL.BL_User_4]
 
 
 def test_disabled_overlay_layer_in_dry_run_keeps_the_pngs(fakes, png_dir):
