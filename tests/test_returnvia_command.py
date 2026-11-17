@@ -118,6 +118,7 @@ class Board:
         self.images = list(images)
         self.shapes = list(shapes)
         self.removed: list = []
+        self.visible: list = [BL.BL_F_Cu]
         self.outline = outline
         self.enabled = [BL.BL_F_Cu, BL.BL_In1_Cu, BL.BL_In2_Cu, BL.BL_B_Cu, *enabled]
 
@@ -126,6 +127,12 @@ class Board:
 
     def get_enabled_layers(self):
         return self.enabled
+
+    def get_visible_layers(self):
+        return list(self.visible)
+
+    def set_visible_layers(self, layers):
+        self.visible = list(layers)
 
     def set_enabled_layers(self, copper_layer_count, layers):
         self.calls.append(("set_enabled_layers", copper_layer_count, list(layers)))
@@ -1223,6 +1230,9 @@ def test_check_overlay_replaces_markers_with_a_circle_per_unserved_end(fakes):
     radius = next(v.diameter / 2 for v in fakes.snap.vias if v.position == SIG)
     expected = marker_items([Marker(SIG, MarkerKind.UNFIXABLE, extent=radius)])
     assert eco2_created(fakes) == [i.proto for i in expected]
+    image_layers = {i.layer for i in fakes.created if i.layer in USER}
+    assert image_layers
+    assert set(board.visible) == {BL.BL_F_Cu, BL.BL_Eco2_User, *image_layers}
 
 
 def test_check_overlay_with_every_end_served_only_removes_markers(fakes):
@@ -1240,6 +1250,7 @@ def test_check_overlay_with_every_end_served_only_removes_markers(fakes):
     ]
     assert board.removed == [stale]
     assert fakes.created == []
+    assert BL.BL_Eco2_User not in board.visible
 
 
 def test_check_without_overlay_leaves_the_markers(fakes, tmp_path):

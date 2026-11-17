@@ -23,6 +23,7 @@ from kipy.proto.common.commands.editor_commands_pb2 import (
     CreateItemsResponse,
     ItemStatusCode,
 )
+from kipy.util.board_layer import canonical_name
 from kipy.util.proto import pack_any
 from kipy.wrapper import Wrapper
 from loguru import logger
@@ -230,10 +231,30 @@ def commit_units(
             + (f" and {len(markers)} markers on User.Eco2" if markers else "")
             + (f", replacing {len(stale)} earlier marker shapes" if stale else "")
         )
+        if markers:
+            show_layers(board, [MARKER_LAYER])
 
     if refill:
         refill_after_commit(kicad, board)
     return len(created)
+
+
+def show_layers(
+    board: kipy.board.Board, layers: Sequence[BoardLayer.ValueType]
+) -> None:
+    """Make `layers` visible in the editor, keeping every visible layer.
+
+    KiCad replaces the whole visible set. This runs after a commit landed,
+    so a failure only warns.
+    """
+    names = ", ".join(canonical_name(L) for L in layers)
+    try:
+        visible = list(board.get_visible_layers())
+        hidden = [L for L in layers if L not in visible]
+        if hidden:
+            board.set_visible_layers(visible + hidden)
+    except (ApiError, KiCadConnectionError) as e:
+        logger.warning(f"Could not make {names} visible in KiCad ({e})")
 
 
 def push_tolerant(board: kipy.board.Board, commit: Commit, label: str) -> bool:

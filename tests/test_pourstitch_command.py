@@ -37,12 +37,19 @@ class Board:
         self.shapes = list(shapes)
         self.outline = outline
         self.removed: list = []
+        self.visible: list = [BL.BL_F_Cu]
 
     def get_copper_layer_count(self):
         return 2
 
     def get_enabled_layers(self):
         return self.enabled
+
+    def get_visible_layers(self):
+        return list(self.visible)
+
+    def set_visible_layers(self, layers):
+        self.visible = list(layers)
 
     def set_enabled_layers(self, copper_layer_count, layers):
         self.calls.append(("set_enabled_layers", copper_layer_count, list(layers)))

@@ -91,6 +91,7 @@ class RecordingBoard:
         self.edges = edge_cuts(SQUARE)
         self.shapes = []
         self.removed = []
+        self.visible = [BL.BL_F_Cu, BL.BL_Edge_Cuts]
 
     def __getattr__(self, attr):
         def record(*args, **kwargs):
@@ -129,6 +130,13 @@ class RecordingBoard:
 
     def refill_zones(self, block=True, max_poll_seconds=0):
         self.calls.append("refill_zones")
+
+    def get_visible_layers(self):
+        return list(self.visible)
+
+    def set_visible_layers(self, layers):
+        self.calls.append(("set_visible_layers", list(layers)))
+        self.visible = list(layers)
 
 
 class FakeKiCad:
@@ -493,6 +501,7 @@ def test_split_commits_with_a_marker_at_the_split_by_default(
     assert placement.markers_for(result.prune) == (
         Marker((20, 20), MarkerKind.UNATTRIBUTED),
     )
+    assert commit.MARKER_LAYER in board.visible
 
 
 @pytest.mark.parametrize(
@@ -622,8 +631,8 @@ def test_commit_creates_items_and_markers_in_one_commit():
     assert via.net.name == "GND"
     assert track.layer == BL.BL_F_Cu and track.width == 300_000
     assert all(m.layer == BL.BL_Eco2_User for m in marks)
-    pushes = [c for c in board.calls if isinstance(c, tuple)]
-    assert len(pushes) == 1 and pushes[0][1].startswith("kistitch pourstitch ")
+    (push,) = pushes(board)
+    assert push[1].startswith("kistitch pourstitch ")
     assert board.calls.count("begin_commit") == 1
     assert created == 3
 
@@ -724,6 +733,79 @@ def test_refill_error_after_the_commit_is_only_a_warning(log):
 
     assert len(pushes(board)) == 1
     assert any(line.startswith("WARNING") and "refill" in line for line in log)
+
+
+def visibility_changes(board):
+    return [
+        c for c in board.calls if isinstance(c, tuple) and c[0] == "set_visible_layers"
+    ]
+
+
+def test_commit_with_markers_shows_the_marker_layer_keeping_visible_ones():
+    board = RecordingBoard()
+    before = list(board.visible)
+
+    commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "x",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    assert set(board.visible) == {*before, commit.MARKER_LAYER}
+    assert len(visibility_changes(board)) == 1
+
+
+def test_commit_with_marker_layer_already_visible_leaves_visibility_alone():
+    board = RecordingBoard()
+    board.visible.append(commit.MARKER_LAYER)
+
+    commit.commit_units(
+        FakeKiCad(board), board, "x", [], [Marker((9, 9), MarkerKind.UNATTRIBUTED)]
+    )
+
+    assert visibility_changes(board) == []
+
+
+def test_commit_only_removing_markers_leaves_visibility_alone():
+    board = RecordingBoard()
+    (stale,) = commit.marker_items([Marker((7, 7), MarkerKind.UNFIXABLE)])
+
+    commit.commit_units(FakeKiCad(board), board, "x", [unit(1, 1)], [], [stale])
+
+    assert board.removed == [stale]
+    assert visibility_changes(board) == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ApiError("busy", code=ApiStatusCode.AS_BUSY),
+        ConnectionError("timed out"),
+    ],
+)
+def test_failing_to_show_the_marker_layer_after_the_commit_only_warns(log, error):
+    class HiddenBoard(RecordingBoard):
+        def get_visible_layers(self):
+            raise error
+
+    board = HiddenBoard()
+
+    created = commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "x",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    assert created == 1
+    assert len(pushes(board)) == 1
+    assert any(
+        line.startswith("WARNING") and "Eco2" in line and "visible" in line
+        for line in log
+    )
 
 
 def test_commit_with_unknown_net_fails_before_opening_a_commit():
