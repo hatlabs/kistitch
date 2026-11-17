@@ -361,6 +361,7 @@ def execute(
     kicad_cli: str | None = None,
     allow_splits: bool = True,
     full_map: bool = False,
+    refill: bool = True,
     kicad: kipy.KiCad | None = None,
 ) -> None:
     """Run returnvia against the open board.
@@ -381,12 +382,18 @@ def execute(
 
     planner = ReturnViaPlanner()
     if check:
-        snapshot, plan = measure_only(kicad, board)
+        snapshot, plan = measure_only(kicad, board, refill)
     else:
         result = run_placement(
             planner,
             options,
-            RunSettings(COMMAND, dry_run, kicad_cli, allow_splits=allow_splits),
+            RunSettings(
+                COMMAND,
+                dry_run,
+                kicad_cli,
+                allow_splits=allow_splits,
+                refill=refill,
+            ),
             kicad,
         )
         snapshot, plan = result.snapshot, result.prune.plan

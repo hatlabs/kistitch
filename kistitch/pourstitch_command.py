@@ -84,6 +84,7 @@ def execute(
     check: bool = False,
     kicad_cli: str | None = None,
     allow_splits: bool = True,
+    refill: bool = True,
     kicad: kipy.KiCad | None = None,
 ) -> None:
     """Run pourstitch against the open board.
@@ -102,7 +103,7 @@ def execute(
 
     stitcher = PourStitcher()
     if check:
-        snapshot, plan = measure_only(kicad, board)
+        snapshot, plan = measure_only(kicad, board, refill)
     else:
         result = run_placement(
             stitcher,
@@ -113,6 +114,7 @@ def execute(
                 kicad_cli,
                 mark_unfixable=False,
                 allow_splits=allow_splits,
+                refill=refill,
             ),
             kicad,
         )

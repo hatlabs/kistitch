@@ -67,7 +67,12 @@ def test_padvia_failure_exits_cleanly(monkeypatch, error):
 
     monkeypatch.setattr(cli, "run_placement", fail)
     args = argparse.Namespace(
-        nets=["GND"], via=None, dry_run=False, kicad_cli=None, allow_splits=False
+        nets=["GND"],
+        via=None,
+        dry_run=False,
+        kicad_cli=None,
+        allow_splits=False,
+        refill=True,
     )
 
     with pytest.raises(SystemExit) as exit_info:
@@ -422,3 +427,93 @@ def test_other_kicad_errors_still_raise(monkeypatch):
 
     with pytest.raises(ApiError):
         cli.main()
+
+
+# ---- --refill / --no-refill ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "flags, refill", [([], True), (["--refill"], True), (["--no-refill"], False)]
+)
+@pytest.mark.parametrize(
+    "argv", [["padvia"], ["pourstitch"], ["returnvia"], ["clear", "--vias"]]
+)
+def test_refill_is_a_global_option_on_by_default(monkeypatch, flags, refill, argv):
+    assert parsed(monkeypatch, [*flags, *argv]).refill is refill
+
+
+def test_refill_help_names_what_it_refills_and_the_undo_steps(monkeypatch, capsys):
+    with pytest.raises(SystemExit):
+        parsed(monkeypatch, ["--help"])
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "--refill, --no-refill" in out
+    assert "after clear --vias" in out
+    assert "undo step" in out
+
+
+@pytest.mark.parametrize("flags, refill", [([], True), (["--no-refill"], False)])
+def test_refill_reaches_the_padvia_run_settings(monkeypatch, flags, refill):
+    seen: list[placement.RunSettings] = []
+    monkeypatch.setattr(
+        cli, "run_placement", lambda planner, options, settings: seen.append(settings)
+    )
+
+    cli.execute_padvia(parsed(monkeypatch, [*flags, "padvia", "--nets", "GND"]))
+
+    assert [s.refill for s in seen] == [refill]
+
+
+def no_board_kicad(monkeypatch, module):
+    monkeypatch.setattr(
+        module.kipy,
+        "KiCad",
+        lambda: type("K", (), {"get_board": lambda self: None})(),
+    )
+    monkeypatch.setattr(module, "check_outline", lambda board: None)
+
+
+HEATMAP_COMMANDS = [
+    (["pourstitch", "--nets", "GND"], pourstitch_command),
+    (["returnvia"], returnvia_command),
+]
+
+
+@pytest.mark.parametrize("argv, module", HEATMAP_COMMANDS)
+@pytest.mark.parametrize("flags, refill", [([], True), (["--no-refill"], False)])
+def test_refill_reaches_the_heatmap_command_run_settings(
+    monkeypatch, argv, module, flags, refill
+):
+    seen: list[placement.RunSettings] = []
+
+    def capture(planner, options, settings, kicad):
+        seen.append(settings)
+        raise Captured
+
+    monkeypatch.setattr(module, "run_placement", capture)
+    no_board_kicad(monkeypatch, module)
+
+    with pytest.raises(Captured):
+        getattr(cli, f"execute_{argv[0]}")(parsed(monkeypatch, [*flags, *argv]))
+
+    assert [s.refill for s in seen] == [refill]
+
+
+@pytest.mark.parametrize("argv, module", HEATMAP_COMMANDS)
+@pytest.mark.parametrize("flags, refill", [([], True), (["--no-refill"], False)])
+def test_refill_reaches_the_check_measurement(monkeypatch, argv, module, flags, refill):
+    seen: list[bool] = []
+
+    def capture(kicad, board, refill=True):
+        seen.append(refill)
+        raise Captured
+
+    monkeypatch.setattr(module, "measure_only", capture)
+    no_board_kicad(monkeypatch, module)
+
+    with pytest.raises(Captured):
+        getattr(cli, f"execute_{argv[0]}")(
+            parsed(monkeypatch, [*flags, *argv, "--check"])
+        )
+
+    assert seen == [refill]

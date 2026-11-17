@@ -1,3 +1,4 @@
+import argparse
 import sys
 
 import kipy.board_types
@@ -7,7 +8,7 @@ from shapely.geometry import LineString, box
 
 from kistitch import cli
 from kistitch.clearvias import stitching_vias
-from kistitch.commit import eco2_segment
+from kistitch.commit import REFILLS_OFF_MESSAGE, eco2_segment
 from kistitch.snapshot import Pad, PadKind, Snapshot, Track, Via, Zone
 
 TWO_LAYERS = ("F.Cu", "B.Cu")
@@ -159,8 +160,9 @@ def clear(monkeypatch, snap, argv, **board_args):
     board = ViaBoard([kipy_via(v.id) for v in snap.vias], **board_args)
     monkeypatch.setattr(cli.kipy, "KiCad", lambda: FakeKiCad(board))
     monkeypatch.setattr(cli.Snapshot, "from_board", staticmethod(lambda b: snap))
+    monkeypatch.setattr(cli, "configure_logging", lambda: None)
     monkeypatch.setattr(sys, "argv", ["kistitch", *argv])
-    cli.execute_clear(cli.parse_args())
+    cli.main()
     return board
 
 
@@ -271,3 +273,41 @@ def test_clear_without_vias_leaves_vias_and_zones_alone(monkeypatch, log):
 
     assert board.calls == []
     assert any("Nothing to clear" in m for m in log)
+
+
+def test_clear_vias_without_refills_only_removes(monkeypatch, log):
+    board = clear(
+        monkeypatch, snapshot(TWO_GND_ONE_POWER), ["--no-refill", "clear", "--vias"]
+    )
+
+    assert board.calls == [
+        "begin_commit",
+        ("remove_items", [v.id for v in TWO_GND_ONE_POWER]),
+        "push_commit",
+    ]
+    assert len([m for m in log if REFILLS_OFF_MESSAGE in m]) == 1
+    assert not [m for m in log if "refill not confirmed" in m]
+
+
+def test_clear_without_vias_does_not_mention_refills(monkeypatch, log):
+    marker = eco2_segment((1, 1), (2, 2))
+
+    board = clear(monkeypatch, snapshot(()), ["--no-refill", "clear"], shapes=[marker])
+
+    assert "push_commit" in board.calls
+    assert not [m for m in log if REFILLS_OFF_MESSAGE in m]
+
+
+def test_library_callers_of_clear_refill_by_default(monkeypatch):
+    board = ViaBoard([kipy_via(v.id) for v in TWO_GND_ONE_POWER])
+    monkeypatch.setattr(cli.kipy, "KiCad", lambda: FakeKiCad(board))
+    monkeypatch.setattr(
+        cli.Snapshot,
+        "from_board",
+        staticmethod(lambda b: snapshot(TWO_GND_ONE_POWER)),
+    )
+    args = argparse.Namespace(overlay_layers=[], dry_run=False, vias=True, nets=None)
+
+    cli.execute_clear(args)
+
+    assert board.calls[-1] == "refill_zones"

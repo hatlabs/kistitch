@@ -14,6 +14,7 @@ from loguru import logger
 import kistitch.overlay
 from kistitch.clearvias import stitching_vias
 from kistitch.commit import (
+    REFILLS_OFF_MESSAGE,
     commit_label,
     marker_shapes,
     push_tolerant,
@@ -198,6 +199,7 @@ def execute_returnvia(args):
             kicad_cli=args.kicad_cli,
             allow_splits=args.allow_splits,
             full_map=args.full_map,
+            refill=args.refill,
         )
 
 
@@ -209,6 +211,14 @@ def parse_args():
         "-n",
         action="store_true",
         help="Do everything except commit the changes",
+    )
+    parser.add_argument(
+        "--refill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Refill the zones before measuring or placing, after committing "
+        "and after clear --vias (on by default). Each refill adds an undo step "
+        "in KiCad; with --no-refill, the fills are used as they are",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -301,7 +311,7 @@ def parse_args():
     return args
 
 
-def execute_clear(args):
+def execute_clear(args, refill: bool = True):
     kicad = kipy.KiCad()
     board = kicad.get_board()
 
@@ -318,6 +328,8 @@ def execute_clear(args):
         )
     )
 
+    if args.vias and not refill:
+        logger.info(REFILLS_OFF_MESSAGE)
     vias = (
         _find_and_log_stitching_vias(board, args.nets, args.dry_run)
         if args.vias
@@ -334,7 +346,7 @@ def execute_clear(args):
         board.drop_commit(commit)
         return
     push_tolerant(board, commit, commit_label("clear"))
-    if vias:
+    if vias and refill:
         # Close the fills over the holes the removed vias leave.
         refill_after_commit(kicad, board)
 
@@ -381,6 +393,7 @@ def execute_padvia(args):
         dry_run=args.dry_run,
         kicad_cli=args.kicad_cli,
         allow_splits=args.allow_splits,
+        refill=args.refill,
     )
     with _exit_on(*PLACEMENT_ERRORS):
         run_placement(plan_padvia, options, settings)
@@ -415,6 +428,7 @@ def execute_pourstitch(args):
             check=args.check,
             kicad_cli=args.kicad_cli,
             allow_splits=args.allow_splits,
+            refill=args.refill,
         )
 
 
@@ -444,7 +458,7 @@ def main():
             case "returnvia":
                 execute_returnvia(args)
             case "clear":
-                execute_clear(args)
+                execute_clear(args, refill=args.refill)
 
 
 if __name__ == "__main__":
