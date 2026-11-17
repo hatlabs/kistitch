@@ -536,7 +536,9 @@ def run_panel_without(module: str) -> subprocess.CompletedProcess[str]:
 def test_panel_without_the_gui_extra_prints_the_install_hint():
     ran = run_panel_without("PySide6")
 
-    assert ran.returncode != 0
+    # Distinct from a failure (1) and a usage error (2), so that the KiCad
+    # plugin's launcher can offer to add the extra.
+    assert ran.returncode == cli.GUI_EXTRA_EXIT == 3
     assert "uv tool install 'kistitch[gui]'" in ran.stderr
 
 
@@ -551,3 +553,34 @@ def test_panel_reports_another_import_error_as_it_is():
 def test_panel_is_installed_as_kistitch_panel():
     (script,) = metadata.entry_points(group="console_scripts", name="kistitch-panel")
     assert script.value == "kistitch.cli:panel_main"
+
+
+def test_kistitch_prints_its_version(monkeypatch, capsys):
+    with pytest.raises(SystemExit) as raised:
+        parsed(monkeypatch, ["--version"])
+
+    assert raised.value.code == 0
+    assert capsys.readouterr().out == f"kistitch {metadata.version('kistitch')}\n"
+
+
+def test_panel_prints_its_version_without_pyside6():
+    code = (
+        "import sys\n"
+        "sys.modules['PySide6'] = None\n"
+        "import kistitch.cli\n"
+        "try:\n"
+        "    kistitch.cli.panel_main(['--version'])\n"
+        "finally:\n"
+        "    loaded = [m for m, v in sys.modules.items() if v is not None]\n"
+        "    print(any(m.startswith(('PySide6', 'kistitch.panel')) "
+        "for m in loaded), file=sys.stderr)\n"
+    )
+    ran = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+
+    assert (ran.returncode, ran.stdout, ran.stderr) == (
+        0,
+        f"kistitch {metadata.version('kistitch')}\n",
+        "False\n",
+    )
