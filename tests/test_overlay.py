@@ -840,6 +840,7 @@ def test_clear_removes_our_overlays_and_keeps_other_images(tmp_path, monkeypatch
         dry_run=False,
         vias=False,
         nets=None,
+        refill=True,
     )
     cli.execute_clear(args)
 

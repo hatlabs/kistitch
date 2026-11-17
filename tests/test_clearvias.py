@@ -1,4 +1,3 @@
-import argparse
 import sys
 
 import kipy.board_types
@@ -329,18 +328,3 @@ def test_clear_without_vias_does_not_mention_refills(monkeypatch, log):
 
     assert "push_commit" in board.calls
     assert not [m for m in log if REFILLS_OFF_MESSAGE in m]
-
-
-def test_library_callers_of_clear_refill_by_default(monkeypatch):
-    board = ViaBoard([kipy_via(v.id) for v in TWO_GND_ONE_POWER])
-    monkeypatch.setattr(cli.kipy, "KiCad", lambda: FakeKiCad(board))
-    monkeypatch.setattr(
-        cli.Snapshot,
-        "from_board",
-        staticmethod(lambda b: snapshot(TWO_GND_ONE_POWER)),
-    )
-    args = argparse.Namespace(overlay_layers=[], dry_run=False, vias=True, nets=None)
-
-    cli.execute_clear(args)
-
-    assert board.calls[-1] == "refill_zones"

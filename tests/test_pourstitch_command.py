@@ -395,6 +395,7 @@ def test_clear_removes_the_overlays_pourstitch_placed(fakes, monkeypatch, tagged
             dry_run=False,
             vias=False,
             nets=None,
+            refill=True,
         )
     )
 

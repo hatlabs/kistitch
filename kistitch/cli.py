@@ -312,7 +312,7 @@ def parse_args():
     return args
 
 
-def execute_clear(args, refill: bool = True):
+def execute_clear(args):
     kicad = kipy.KiCad()
     board = kicad.get_board()
 
@@ -332,7 +332,7 @@ def execute_clear(args, refill: bool = True):
     if args.vias:
         # Stitching vias are picked by the fills they touch, so stale fills
         # would pick the wrong ones.
-        if not refill:
+        if not args.refill:
             logger.info(REFILLS_OFF_MESSAGE)
         elif not refill_tolerant(kicad, board):
             logger.warning("Zone refill not confirmed; fills may be stale")
@@ -352,7 +352,7 @@ def execute_clear(args, refill: bool = True):
         board.drop_commit(commit)
         return
     push_tolerant(board, commit, commit_label("clear"))
-    if vias and refill:
+    if vias and args.refill:
         # Close the fills over the holes the removed vias leave.
         refill_after_commit(kicad, board)
 
@@ -464,7 +464,7 @@ def main():
             case "returnvia":
                 execute_returnvia(args)
             case "clear":
-                execute_clear(args, refill=args.refill)
+                execute_clear(args)
 
 
 if __name__ == "__main__":
