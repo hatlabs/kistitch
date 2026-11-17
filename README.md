@@ -208,3 +208,19 @@ Under each step, its status line gives the step's latest Heatmap or Place in thi
 
 - Placed vias can't be grouped, because KiCad 10 refuses to create groups through the API.
 - The planners use fixed clearances (0.3 mm to other-net copper; a pad's clearance override plus 0.1 mm where it has one) and don't evaluate custom design rules. The DRC check is what enforces those.
+
+## Development
+
+Development needs [uv](https://docs.astral.sh/uv/). The `run` script holds the development commands; `./run help` lists them.
+
+```
+./run sync       # dependencies and the gui extra
+./run test       # the tests; extra arguments go to pytest
+./run check      # lint and the tests, as CI does
+```
+
+Tests never need a running KiCad. The panel's widget tests run on Qt's offscreen platform and are skipped without the `gui` extra.
+
+### Releasing
+
+Every merge to main stages a release: a pre-release tagged `v<VERSION>+<N>_pre` and a draft `v<VERSION>+<N>`, where N counts the builds of that version. Publishing the draft on GitHub builds the wheel and the sdist and uploads them to PyPI as version `<VERSION>`. PyPI takes each version once, so a release of a version already there uploads nothing: bump the version with `./run bumpversion patch|minor|major` (needs `uv tool install bump2version`) before the release. It updates `VERSION`, `pyproject.toml` and `uv.lock`.

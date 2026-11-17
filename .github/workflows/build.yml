@@ -1,0 +1,53 @@
+# Builds the wheel and the sdist, installs each in a fresh environment, and
+# runs the CLI from it. pr.yml calls it on every pull request, and
+# release.yml before publishing.
+name: Build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Run steps with -eo pipefail rather than the implicit bash -e.
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The oldest CPython that requires-python allows.
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build the wheel and the sdist
+        run: uv build --out-dir dist
+
+      - name: Run the CLI installed from each
+        run: |
+          shopt -s nullglob
+          for pattern in 'dist/*.whl' 'dist/*.tar.gz'; do
+            files=($pattern)
+            if [ "${#files[@]}" -ne 1 ]; then
+              echo "::error::Expected one $pattern, found ${#files[@]}"
+              exit 1
+            fi
+            uv run --isolated --no-project --no-config --python "$PYTHON_VERSION" --with "${files[0]}" \
+              kistitch --help
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
