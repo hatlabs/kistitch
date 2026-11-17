@@ -61,16 +61,14 @@ class Marker:
     extent: float = 0.0
 
 
-# Each kind gets its own glyph so the spots can be told apart on Eco2.
-# UNFIXABLE is a circle; these are unit-square line pairs.
-_GLYPHS: dict[MarkerKind, list[tuple[Point2, Point2]]] = {
-    MarkerKind.UNATTRIBUTED: [
-        ((-1, -1), (1, -1)),
-        ((1, -1), (1, 1)),
-        ((1, 1), (-1, 1)),
-        ((-1, 1), (-1, -1)),
-    ],
-}
+# An unfixable spot gets a circle and an unattributed one this square, so the
+# two can be told apart on Eco2. The segments span a unit square.
+_SQUARE: tuple[tuple[Point2, Point2], ...] = (
+    ((-1, -1), (1, -1)),
+    ((1, -1), (1, 1)),
+    ((1, 1), (-1, 1)),
+    ((-1, 1), (-1, -1)),
+)
 
 
 def _nm(v: float) -> int:
@@ -127,7 +125,7 @@ def marker_items(markers: Sequence[Marker]) -> list[kipy.board_types.BoardShape]
             continue
         x, y = m.position
         h = MARKER_HALF_SIZE
-        for (ax, ay), (bx, by) in _GLYPHS[m.kind]:
+        for (ax, ay), (bx, by) in _SQUARE:
             out.append(eco2_segment((x + ax * h, y + ay * h), (x + bx * h, y + by * h)))
     return out
 
