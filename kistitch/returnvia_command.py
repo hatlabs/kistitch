@@ -376,9 +376,7 @@ def execute(
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
     check_outline(board)
-    place_overlay = outputs.overlay and overlay.prepare_overlay_layers(
-        board, outputs, dry_run
-    )
+    layers = overlay.prepare_overlay_layers(board, outputs, dry_run)
 
     planner = ReturnViaPlanner()
     if check:
@@ -453,7 +451,7 @@ def execute(
             else None,
             snapshot,
             outputs,
-            place_overlay,
+            layers.place,
             OVERLAY_COMMIT,
             unserved_markers(results, snapshot.vias) if check else None,
         )

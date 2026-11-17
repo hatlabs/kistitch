@@ -145,16 +145,26 @@ class OverlayLayersError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class PreparedLayers:
+    """Whether overlays can go on the board, and the layers enabled for them."""
+
+    place: bool
+    enabled: tuple[str, ...] = ()
+
+
 def prepare_overlay_layers(
     board: kipy.board.Board, outputs: Outputs, dry_run: bool
-) -> bool:
+) -> PreparedLayers:
     """Whether overlays can go on the board, enabling missing overlay layers
-    unless `dry_run`.
+    unless `dry_run`. Without `outputs.overlay` nothing is placed or checked.
 
     Too few overlay layers for the copper count, or a name that is not a
     non-copper layer, raises before any board change. If KiCad refuses to
     enable a layer, the error comes after the enabled set was changed.
     """
+    if not outputs.overlay:
+        return PreparedLayers(place=False)
     count = board.get_copper_layer_count()
     if count > len(outputs.overlay_layers):
         raise OverlayLayersError(
@@ -170,15 +180,15 @@ def prepare_overlay_layers(
         )
     missing = missing_layers(board, needed)
     if not missing:
-        return True
+        return PreparedLayers(place=True)
     if dry_run:
         logger.warning(
             f"Overlay layers not enabled on the board: {', '.join(missing)}. A run "
             "without --dry-run enables them; writing the PNGs only"
         )
-        return False
+        return PreparedLayers(place=False)
     enable_layers(board, missing)
-    return True
+    return PreparedLayers(place=True, enabled=tuple(missing))
 
 
 @dataclass(frozen=True)
