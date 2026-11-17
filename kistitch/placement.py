@@ -205,9 +205,10 @@ def _check_splits(
         return
     rising = drc.rising_connectivity_nets(runner.baseline(), runner.planned)
     splits = [v for v in connectivity if drc.violation_nets(v) & rising]
+    level = "WARNING" if settings.allow_splits else "ERROR"
     for v in connectivity:
         if v in splits:
-            logger.error(f"  connectivity: {v}")
+            logger.log(level, f"  connectivity: {v}")
         else:
             logger.info(
                 f"  connectivity violation moved, count on its net unchanged: {v}"
@@ -223,7 +224,7 @@ def _check_splits(
     )
     if settings.dry_run:
         outcome = "commit with markers" if settings.allow_splits else "refuse to commit"
-        logger.error(f"{message}; a real run would {outcome}")
+        logger.log(level, f"{message}; a real run would {outcome}")
     elif settings.allow_splits:
         logger.warning(f"{message}; committing anyway, with markers")
     else:
