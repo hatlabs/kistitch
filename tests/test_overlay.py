@@ -903,6 +903,28 @@ def test_failing_to_show_overlay_layers_only_warns(tmp_path, monkeypatch, log):
     assert any("User.1" in line and "visible" in line for line in log)
 
 
+def test_failing_to_set_overlay_layers_visible_only_warns(tmp_path, monkeypatch, log):
+    monkeypatch.setattr(overlay, "create_checked", lambda board, items: None)
+
+    class RefusingBoard(ImageBoard):
+        def set_visible_layers(self, layers):
+            raise ApiError("busy", code=ApiStatusCode.AS_BUSY)
+
+    board = RefusingBoard()
+
+    assert overlay.place_overlays(
+        board,  # type: ignore[arg-type]
+        [image(tmp_path)],
+        PLACEMENT,
+        ("User.1",),
+        "label",
+    )
+
+    assert ("push_commit", "label") in board.calls
+    assert "drop_commit" not in board.calls
+    assert any("User.1" in line and "visible" in line for line in log)
+
+
 class ClearBoard:
     """A board with an Edge.Cuts outline, Eco2 markers and reference images."""
 

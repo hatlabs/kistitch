@@ -808,6 +808,52 @@ def test_failing_to_show_the_marker_layer_after_the_commit_only_warns(log, error
     )
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        ApiError("busy", code=ApiStatusCode.AS_BUSY),
+        ConnectionError("timed out"),
+    ],
+)
+def test_failing_to_set_the_visible_layers_after_the_commit_only_warns(log, error):
+    class RefusingBoard(RecordingBoard):
+        def set_visible_layers(self, layers):
+            raise error
+
+    board = RefusingBoard()
+
+    created = commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "x",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    assert created == 1
+    assert len(pushes(board)) == 1
+    assert "drop_commit" not in board.calls
+    assert any(
+        line.startswith("WARNING") and "Eco2" in line and "visible" in line
+        for line in log
+    )
+
+
+def test_push_timeout_with_markers_leaves_visibility_alone():
+    # Whether the markers landed is unknown, so their layer stays as it was.
+    board = PushFailingBoard(ConnectionError("timed out"))
+
+    commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "x",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    assert visibility_changes(board) == []
+
+
 def test_commit_with_unknown_net_fails_before_opening_a_commit():
     board = RecordingBoard()
 
