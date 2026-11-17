@@ -2,9 +2,12 @@ import importlib.util
 import io
 import json
 import os
+import ssl
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -737,3 +740,49 @@ class TestRealSystem:
         while not done.exists() and time.monotonic() < deadline:
             time.sleep(0.01)
         assert done.exists()
+
+    def test_runs_the_downloaded_installer_without_kicads_python(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[tuple[urllib.request.Request, ssl.SSLContext]] = []
+
+        def urlopen(
+            request: urllib.request.Request, timeout: float, context: ssl.SSLContext
+        ) -> io.BytesIO:
+            calls.append((request, context))
+            return io.BytesIO(b'echo "$PYTHONHOME"; echo installed >&2; exit 0\n')
+
+        monkeypatch.setattr(launcher.urllib.request, "urlopen", urlopen)
+        host = launcher.Host(
+            windows=False,
+            home=str(tmp_path),
+            env={"PATH": os.defpath, "PYTHONHOME": "/kicad/python"},
+        )
+
+        installed = launcher.RealSystem(host).install_uv()
+
+        assert installed == Completed(0, "\n", "installed\n")
+        [(request, context)] = calls
+        expected = launcher.installer_request()
+        assert request.full_url == expected.full_url
+        assert request.header_items() == expected.header_items()
+        assert isinstance(context, ssl.SSLContext)
+
+    def test_a_failed_download_fails_the_install(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def urlopen(
+            request: urllib.request.Request, timeout: float, context: ssl.SSLContext
+        ) -> io.BytesIO:
+            raise urllib.error.URLError("no route to host")
+
+        monkeypatch.setattr(launcher.urllib.request, "urlopen", urlopen)
+        host = launcher.Host(windows=False, home=str(tmp_path), env={"PATH": ""})
+        system = launcher.RealSystem(host)
+
+        with pytest.raises(urllib.error.URLError):
+            system.install_uv()
+        result = launcher.perform(
+            launcher.Offer(launcher.Need.UV_AND_KISTITCH, None), host, system
+        )
+        assert result == Completed(1, "", "<urlopen error no route to host>")
