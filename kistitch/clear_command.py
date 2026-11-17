@@ -14,6 +14,7 @@ from loguru import logger
 
 from kistitch.clearvias import RemovableVias, stitching_vias
 from kistitch.commit import (
+    UNKNOWN_PUSH_REFILL_MESSAGE,
     CommitOutcome,
     commit_label,
     marker_shapes,
@@ -63,6 +64,8 @@ def clear(
         board.drop_commit(commit)
         return Cleared(vias=0, commit=CommitOutcome.NOTHING)
     if not push_tolerant(board, commit, commit_label("clear")):
+        if removed and refill:
+            logger.warning(UNKNOWN_PUSH_REFILL_MESSAGE)
         return Cleared(vias=0, commit=CommitOutcome.UNKNOWN)
     if removed and refill:
         # Close the fills over the holes the removed vias leave.

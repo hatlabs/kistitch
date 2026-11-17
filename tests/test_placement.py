@@ -782,13 +782,25 @@ def test_push_timeout_keeps_the_commit_and_warns(log):
     )
 
 
-def test_push_timeout_skips_the_refill_after_the_commit():
+def test_push_timeout_skips_the_refill_after_the_commit(log):
     # A lost connection would leave the refill waiting out its deadline.
     board = PushFailingBoard(ConnectionError("timed out"))
 
     commit.commit_units(FakeKiCad(board), board, "x", [unit(1, 1)], [])  # type: ignore[arg-type]
 
     assert "refill_zones" not in board.calls
+    assert any(
+        line.startswith("WARNING") and commit.UNKNOWN_PUSH_REFILL_MESSAGE in line
+        for line in log
+    )
+
+
+def test_push_timeout_without_refills_does_not_ask_for_a_refill(log):
+    board = PushFailingBoard(ConnectionError("timed out"))
+
+    commit.commit_units(FakeKiCad(board), board, "x", [unit(1, 1)], [], refill=False)  # type: ignore[arg-type]
+
+    assert not any(commit.UNKNOWN_PUSH_REFILL_MESSAGE in line for line in log)
 
 
 def test_push_refused_by_kicad_drops_the_commit_and_raises():

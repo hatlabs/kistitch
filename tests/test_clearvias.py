@@ -7,7 +7,12 @@ from shapely.geometry import LineString, box
 
 from kistitch import clear_command, clearvias, cli
 from kistitch.clearvias import RemovableVias, stitching_vias
-from kistitch.commit import REFILLS_OFF_MESSAGE, CommitOutcome, eco2_segment
+from kistitch.commit import (
+    REFILLS_OFF_MESSAGE,
+    UNKNOWN_PUSH_REFILL_MESSAGE,
+    CommitOutcome,
+    eco2_segment,
+)
 from kistitch.overlay import DEFAULT_OVERLAY_LAYERS
 from kistitch.snapshot import Pad, PadKind, Snapshot, Track, Via, Zone
 
@@ -218,6 +223,39 @@ def test_clear_vias_skips_the_refill_when_the_push_times_out(monkeypatch, log):
     assert board.calls[-1] == "push_commit"
     assert board.calls.count("refill_zones") == 1  # before counting only
     assert any("it may have landed" in m for m in log)
+    assert any(UNKNOWN_PUSH_REFILL_MESSAGE in m for m in log)
+
+
+def test_clear_vias_without_refills_does_not_ask_for_a_refill_after_a_lost_push(
+    monkeypatch, log
+):
+    board = clear(
+        monkeypatch,
+        snapshot(TWO_GND_ONE_POWER),
+        ["--no-refill", "clear", "--vias"],
+        push_error=KiCadConnectionError("timed out"),
+    )
+
+    assert board.calls[-1] == "push_commit"
+    assert any("it may have landed" in m for m in log)
+    assert not any(UNKNOWN_PUSH_REFILL_MESSAGE in m for m in log)
+
+
+def test_clear_without_vias_does_not_ask_for_a_refill_after_a_lost_push(
+    monkeypatch, log
+):
+    marker = eco2_segment((1, 1), (2, 2))
+
+    clear(
+        monkeypatch,
+        snapshot(()),
+        ["clear"],
+        shapes=[marker],
+        push_error=KiCadConnectionError("timed out"),
+    )
+
+    assert any("it may have landed" in m for m in log)
+    assert not any(UNKNOWN_PUSH_REFILL_MESSAGE in m for m in log)
 
 
 def test_clear_nets_without_vias_is_a_usage_error(monkeypatch, capsys):

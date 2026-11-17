@@ -44,6 +44,12 @@ REFILLS_OFF_MESSAGE = (
     "Automatic zone refills are off: using the zone fills as they are; "
     "refill zones in KiCad (press B) before running kistitch"
 )
+# After an unknown push the refill is skipped: it would wait out its
+# deadline on a lost connection, and the commit usually landed anyway.
+UNKNOWN_PUSH_REFILL_MESSAGE = (
+    "Zones not refilled; once the commit shows in KiCad's undo history, "
+    "press B to refill zones"
+)
 COMMIT_PREFIX = "kistitch"
 
 
@@ -231,6 +237,8 @@ def commit_units(
 
     # Outside the try above: once pushed, the commit can't be dropped.
     if not push_tolerant(board, commit, label):
+        if refill:
+            logger.warning(UNKNOWN_PUSH_REFILL_MESSAGE)
         return CommitOutcome.UNKNOWN
     logger.info(
         f"Committed {len(units)} vias as '{label}'"
