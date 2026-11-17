@@ -48,6 +48,10 @@ OVERLAY_PPI = 254
 OVERLAY_TAG = ("kistitch", "pourstitch-overlay")
 # Overlays placed before the project was renamed from breakneck carry this.
 BREAKNECK_OVERLAY_TAG = ("breakneck", "pourstitch-overlay")
+LOST_PUSH_OVERLAY_MESSAGE = (
+    "Placement push not confirmed: overlays written, not placed; "
+    "the previous overlays are still on the board"
+)
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_CHUNK_HEADER = struct.Struct(">I4s")
 PNG_CRC_SIZE = 4

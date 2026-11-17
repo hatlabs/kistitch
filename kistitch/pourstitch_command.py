@@ -10,6 +10,7 @@ import kipy.board
 from loguru import logger
 
 from kistitch import overlay, render
+from kistitch.commit import CommitOutcome
 from kistitch.placement import (
     RunResult,
     RunSettings,
@@ -175,6 +176,13 @@ def execute(
             )
         logger.info(f"Wrote {outputs.render}")
 
+    # After a lost placement push the overlay commit would go over the same
+    # connection; the PNGs are written for placing by hand instead.
+    place = layers.place and (
+        result is None or result.commit is not CommitOutcome.UNKNOWN
+    )
+    if layers.place and not place:
+        logger.warning(overlay.LOST_PUSH_OVERLAY_MESSAGE)
     overlays_placed = False
     if outputs.overlay:
         # On the board, existing and planned vias show as themselves.
@@ -189,7 +197,7 @@ def execute(
             else None,
             snapshot,
             outputs,
-            layers.place,
+            place,
             OVERLAY_COMMIT,
             () if check else None,
         )

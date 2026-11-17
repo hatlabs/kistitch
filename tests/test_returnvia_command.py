@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import io
 from itertools import pairwise
 from pathlib import Path
@@ -198,7 +199,9 @@ def fakes(monkeypatch):
         f.planned.append(settings)
         plan = f.plan or planner(f.snap, options, [])
         return RunResult(
-            f.snap, drc.PruneResult(plan, (), (), (), 1), commit=CommitOutcome.LANDED
+            f.snap,
+            drc.PruneResult(plan, (), (), (), 1),
+            commit=CommitOutcome.NOTHING if settings.dry_run else CommitOutcome.LANDED,
         )
 
     monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda board: f.snap))
@@ -831,6 +834,27 @@ def test_overlay_images_kicad_refuses_are_reported_not_placed(
     assert list(png_dir.glob("*.png"))
 
 
+def test_overlays_after_a_lost_placement_push_are_written_not_placed(
+    fakes, monkeypatch, png_dir, log
+):
+    landed = returnvia_command.run_placement
+    monkeypatch.setattr(
+        returnvia_command,
+        "run_placement",
+        lambda *args: dataclasses.replace(landed(*args), commit=CommitOutcome.UNKNOWN),
+    )
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+    board = Board()
+
+    result = run(board, check=False, full_map=True, overlay=True)
+
+    assert not result.overlays_placed
+    assert "begin_commit" not in board.calls
+    assert fakes.created == []
+    assert list(png_dir.glob("*.png"))
+    assert sum(overlay.LOST_PUSH_OVERLAY_MESSAGE in m for m in log) == 1
+
+
 def test_place_returns_the_placement_and_its_unfixable_and_forced_vias(fakes):
     fakes.snap = snapshot()
     spot = UnfixableSpot(SIG, "SIG", "no room")
@@ -1023,8 +1047,11 @@ def test_dry_run_overlay_shows_the_planned_vias(fakes, log):
     fakes.snap = snapshot()
     board = Board()
 
-    run(board, overlay=True, check=False, dry_run=True, full_map=True)
+    result = run(board, overlay=True, check=False, dry_run=True, full_map=True)
 
+    assert result.placement is not None
+    assert result.placement.commit is CommitOutcome.NOTHING
+    assert result.overlays_placed
     assert [s.dry_run for s in fakes.planned] == [True]
     assert board.calls == [
         "begin_commit",

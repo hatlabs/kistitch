@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 from itertools import pairwise
 from pathlib import Path
 
@@ -114,7 +115,9 @@ def fakes(monkeypatch):
         planned = Snapshot.from_board(kicad.get_board())
         plan = planner(planned, options, [])
         return RunResult(
-            planned, drc.PruneResult(plan, (), (), (), 1), commit=CommitOutcome.LANDED
+            planned,
+            drc.PruneResult(plan, (), (), (), 1),
+            commit=CommitOutcome.NOTHING if settings.dry_run else CommitOutcome.LANDED,
         )
 
     monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda board: snap))
@@ -283,8 +286,16 @@ def test_dry_run_still_places_overlay(fakes, tmp_path: Path):
     board = Board()
     outputs = overlay.Outputs(overlay=True, render=tmp_path / "heat.png")
 
-    pourstitch_command.execute(OPTIONS, outputs, dry_run=True, kicad=KiCad(board))  # type: ignore[arg-type]
+    result = pourstitch_command.execute(
+        OPTIONS,
+        outputs,
+        dry_run=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
 
+    assert result.placement is not None
+    assert result.placement.commit is CommitOutcome.NOTHING
+    assert result.overlays_placed
     assert [s.dry_run for s in placements] == [True]
     assert board.calls == [
         "begin_commit",
@@ -359,6 +370,31 @@ def test_overlay_images_kicad_refuses_are_reported_not_placed(
 
     assert not result.overlays_placed
     assert len(list(png_dir.glob("*.png"))) == len(LAYERS)
+
+
+def test_overlays_after_a_lost_placement_push_are_written_not_placed(
+    fakes, monkeypatch, png_dir, log
+):
+    created, _ = fakes
+    landed = pourstitch_command.run_placement
+    monkeypatch.setattr(
+        pourstitch_command,
+        "run_placement",
+        lambda *args: dataclasses.replace(landed(*args), commit=CommitOutcome.UNKNOWN),
+    )
+    board = Board()
+
+    result = pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
+
+    assert not result.overlays_placed
+    assert "begin_commit" not in board.calls
+    assert created == []
+    assert len(list(png_dir.glob("*.png"))) == len(LAYERS)
+    assert sum(overlay.LOST_PUSH_OVERLAY_MESSAGE in m for m in log) == 1
 
 
 def test_too_few_overlay_layers_is_an_error(fakes):
