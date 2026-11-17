@@ -329,15 +329,18 @@ def execute_clear(args):
         )
     )
 
+    refilled = False
     if args.vias:
         # Stitching vias are picked by the fills they touch, so stale fills
         # would pick the wrong ones.
         if not args.refill:
             logger.info(REFILLS_OFF_MESSAGE)
-        elif not refill_tolerant(kicad, board):
+        elif refill_tolerant(kicad, board):
+            refilled = True
+        else:
             logger.warning("Zone refill not confirmed; fills may be stale")
     vias = (
-        _find_and_log_stitching_vias(board, args.nets, args.dry_run)
+        _find_and_log_stitching_vias(board, args.nets, args.dry_run, refilled)
         if args.vias
         else []
     )
@@ -358,10 +361,13 @@ def execute_clear(args):
 
 
 def _find_and_log_stitching_vias(
-    board: kipy.board.Board, nets: Sequence[str] | None, dry_run: bool
+    board: kipy.board.Board,
+    nets: Sequence[str] | None,
+    dry_run: bool,
+    refilled: bool,
 ) -> list[kipy.board_types.Via]:
     snapshot = Snapshot.from_board(board)
-    _warn_unclearable_nets(snapshot, nets)
+    _warn_unclearable_nets(snapshot, nets, refilled)
     found = stitching_vias(snapshot, nets)
     if found:
         counts = Counter(v.net for v in found)
@@ -373,7 +379,14 @@ def _find_and_log_stitching_vias(
     return [v for v in board.get_vias() if v.id.value in ids]
 
 
-def _warn_unclearable_nets(snapshot: Snapshot, nets: Sequence[str] | None) -> None:
+def _warn_unclearable_nets(
+    snapshot: Snapshot, nets: Sequence[str] | None, refilled: bool
+) -> None:
+    """Warn about selected nets whose vias can't be judged by their fills.
+
+    After a confirmed refill an empty zone fills to nothing, so asking for
+    another refill would only repeat it.
+    """
     zoned = {z.net for z in snapshot.copper_zones}
     selected = zoned if nets is None else set(nets)
     for net in sorted(selected - zoned):
@@ -382,12 +395,17 @@ def _warn_unclearable_nets(snapshot: Snapshot, nets: Sequence[str] | None) -> No
         z.net for z in snapshot.copper_zones if z.net in selected and not z.fills
     )
     for net, n in sorted(unfilled.items()):
-        logger.warning(
-            f"{n} zone{'s' if n > 1 else ''} of {net} "
-            f"{'have' if n > 1 else 'has'} no fill, so vias that touch only "
-            f"{'them' if n > 1 else 'it'} stay; press B in KiCad to refill zones "
-            "and run again"
-        )
+        zones = f"{n} zone{'s' if n > 1 else ''} of {net} {'have' if n > 1 else 'has'}"
+        them = "them" if n > 1 else "it"
+        if refilled:
+            logger.warning(
+                f"{zones} no fill after the refill, so vias that touch only {them} stay"
+            )
+        else:
+            logger.warning(
+                f"{zones} no fill, so vias that touch only {them} stay; press B "
+                "in KiCad to refill zones and run again"
+            )
 
 
 def execute_padvia(args):

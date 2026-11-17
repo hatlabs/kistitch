@@ -246,7 +246,23 @@ def test_clear_vias_warns_about_unfilled_zones(monkeypatch, log, nets):
 
     clear(monkeypatch, snap, ["clear", "--vias", *nets])
 
-    assert any("1 zone of GND has no fill" in m for m in log)
+    assert any("1 zone of GND has no fill after the refill" in m for m in log)
+    assert not any("press B" in m for m in log)
+
+
+def test_clear_vias_without_refills_asks_for_a_refill_of_unfilled_zones(
+    monkeypatch, log
+):
+    unfilled = Zone(
+        net="GND", layers=TWO_LAYERS, priority=0, outline=GND_AREA, fills={}
+    )
+    snap = snapshot(TWO_GND_ONE_POWER, zones=(unfilled, ZONES[1]))
+
+    clear(monkeypatch, snap, ["--no-refill", "clear", "--vias"])
+
+    assert any(
+        "1 zone of GND has no fill" in m and "press B in KiCad" in m for m in log
+    )
 
 
 def test_clear_vias_ignores_unfilled_zones_of_other_nets(monkeypatch, log):
