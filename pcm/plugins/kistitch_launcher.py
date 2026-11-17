@@ -55,7 +55,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TextIO
 
-REQUIRED_VERSION = "0.7.0"
+REQUIRED_VERSION = "0.7.1"
 PACKAGE = f"kistitch[gui]>={REQUIRED_VERSION}"
 PYTHON = "3.14"
 """The Python uv installs kistitch for. Without it uv takes the newest Python
