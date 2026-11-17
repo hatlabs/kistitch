@@ -875,6 +875,31 @@ def test_markers_for_marks_unfixable_and_unattributed_but_not_forced():
     assert [m.kind for m in without_unfixable] == [MarkerKind.UNATTRIBUTED]
 
 
+def test_summary_lists_each_forced_via_at_warning(log):
+    # A forced via that meets the clearance rule has no DRC violation and no
+    # marker, so the log is the only record of where it is.
+    result = drc.PruneResult(
+        plan=Plan(
+            units=(
+                unit(1, 1),
+                PlannedUnit((2.5, 3.25), "GND", VIA, forced=True),
+                PlannedUnit((4, 5), "GND2", VIA, forced=True),
+            )
+        ),
+        dropped=(),
+        forced=(),
+        unattributed=(),
+        rounds=1,
+    )
+
+    placement.log_summary("returnvia", result)
+
+    warnings = [line for line in log if line.startswith("WARNING")]
+    assert any("2 forced vias" in line for line in warnings)
+    assert any("forced via: GND at (2.500, 3.250)" in line for line in warnings)
+    assert any("forced via: GND2 at (4.000, 5.000)" in line for line in warnings)
+
+
 # ---- refill --------------------------------------------------------------------
 
 
