@@ -178,6 +178,10 @@ class CreateItemsError(RuntimeError):
     pass
 
 
+class UnknownNetsError(ValueError):
+    """Units name nets the board no longer has."""
+
+
 def create_checked(board: kipy.board.Board, items: Sequence[Wrapper]) -> list[Wrapper]:
     """Create items and raise if KiCad refuses any of them.
 
@@ -218,7 +222,7 @@ def commit_units(
     nets = {n.name: n for n in board.get_nets()}
     missing = sorted({u.net for u in units} - nets.keys())
     if missing:
-        raise ValueError(f"Nets not on the board: {', '.join(missing)}")
+        raise UnknownNetsError(f"Nets not on the board: {', '.join(missing)}")
     layer_ids = {
         L: board.get_layer_by_name(L) for L in {u.stub.layer for u in units if u.stub}
     }

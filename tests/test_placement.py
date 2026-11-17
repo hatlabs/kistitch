@@ -722,6 +722,17 @@ def test_commit_creates_items_and_markers_in_one_commit():
     assert created is CommitOutcome.LANDED
 
 
+def test_commit_of_nets_gone_from_the_board_raises_before_committing():
+    board = RecordingBoard()
+
+    with pytest.raises(commit.UnknownNetsError, match="VBUS"):
+        commit.commit_units(
+            FakeKiCad(board), board, "padvia", [unit(1, 0, net="VBUS")], []
+        )
+
+    assert "begin_commit" not in board.calls
+
+
 def test_unit_items_make_one_track_per_stub_leg():
     stub = Stub(path=((0, 0), (1, 1), (3, 1)), width=0.3, layer="F.Cu")
     nets = {"GND": kipy.board_types.Net()}
