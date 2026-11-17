@@ -786,3 +786,31 @@ class TestRealSystem:
             launcher.Offer(launcher.Need.UV_AND_KISTITCH, None), host, system
         )
         assert result == Completed(1, "", "<urlopen error no route to host>")
+
+    def test_a_command_that_outlives_its_timeout_is_an_os_error(
+        self, tmp_path: Path
+    ) -> None:
+        system = self.system(tmp_path, launcher.START_WAIT)
+
+        with pytest.raises(OSError, match="did not finish"):
+            system.run(["/bin/sh", "-c", "sleep 5"], timeout=0.1)
+
+
+def test_child_environment_drops_only_kicads_python_settings() -> None:
+    kept = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/u",
+        "KICAD_API_SOCKET": "ipc:///tmp/kicad/api.sock",
+        "KICAD_API_TOKEN": "token",
+    }
+    kicads = (
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONEXECUTABLE",
+        "__PYVENV_LAUNCHER__",
+        "VIRTUAL_ENV",
+    )
+    env = kept | {name: f"/kicad/{name}" for name in kicads}
+
+    assert launcher.child_environment(env) == kept
