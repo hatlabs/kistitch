@@ -5,13 +5,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 from kipy.board_types import BoardSegment
+from kipy.errors import ApiError
 from kipy.geometry import Vector2
 from kipy.proto.board.board_types_pb2 import BoardLayer as BL
+from kipy.proto.common.envelope_pb2 import ApiStatusCode
 from PIL import Image
 from shapely.geometry import box
 
 from kistitch import cli, overlay, pourstitch_command, render, returnvia_command
-from kistitch.commit import CreateItemsError
+from kistitch.commit import CreateItemsError, Marker, MarkerKind
 from kistitch.plan import Plan, PlannedUnit, UnfixableSpot
 from kistitch.raster import CoverageMap, Grid
 from kistitch.snapshot import NM_PER_MM, Snapshot, Via, ViaSize
@@ -535,6 +537,19 @@ class ImageBoard:
         self.calls: list = []
         self.existing = list(existing)
         self.refuse = refuse
+        self.visible = [BL.BL_F_Cu, BL.BL_User_2]
+        self.visibility_calls: list = []
+        self.shapes: list = []
+
+    def get_shapes(self):
+        return self.shapes
+
+    def get_visible_layers(self):
+        return list(self.visible)
+
+    def set_visible_layers(self, layers):
+        self.visibility_calls.append(list(layers))
+        self.visible = list(layers)
 
     def get_reference_images(self):
         return self.existing
@@ -778,6 +793,138 @@ def test_previous_overlays_are_found_at_the_board_placement(tmp_path, monkeypatc
     assert ("remove_items", 1) in board.calls
 
 
+def test_placing_overlays_shows_their_layers_keeping_visible_ones(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(overlay, "create_checked", lambda board, items: None)
+    board = ImageBoard()
+    second = overlay.OverlayImage(
+        "B.Cu", "User.3", image(tmp_path).path, image(tmp_path).placement
+    )
+
+    overlay.place_overlays(
+        board,  # type: ignore[arg-type]
+        [image(tmp_path), second],
+        PLACEMENT,
+        ("User.1", "User.2", "User.3"),
+        "label",
+    )
+
+    assert set(board.visible) == {BL.BL_F_Cu, BL.BL_User_2, BL.BL_User_1, BL.BL_User_3}
+    assert len(board.visibility_calls) == 1
+
+
+def test_placing_markers_with_overlays_shows_the_marker_layer(tmp_path, monkeypatch):
+    monkeypatch.setattr(overlay, "create_checked", lambda board, items: None)
+    board = ImageBoard()
+
+    overlay.place_overlays(
+        board,  # type: ignore[arg-type]
+        [],
+        PLACEMENT,
+        ("User.1",),
+        "label",
+        markers=[Marker((1, 1), MarkerKind.UNFIXABLE)],
+    )
+
+    assert set(board.visible) == {BL.BL_F_Cu, BL.BL_User_2, BL.BL_Eco2_User}
+
+
+def test_overlay_layers_already_visible_leave_visibility_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(overlay, "create_checked", lambda board, items: None)
+    board = ImageBoard()
+    board.visible.append(BL.BL_User_1)
+
+    overlay.place_overlays(
+        board,  # type: ignore[arg-type]
+        [image(tmp_path)],
+        PLACEMENT,
+        ("User.1",),
+        "label",
+    )
+
+    assert board.visibility_calls == []
+
+
+def test_only_removing_overlays_and_markers_leaves_visibility_alone(monkeypatch):
+    monkeypatch.setattr(overlay, "create_checked", lambda board, items: None)
+    board = ImageBoard(existing=[Existing(BL.BL_User_1)])
+    board.shapes = [eco2_shape()]
+
+    overlay.place_overlays(
+        board,  # type: ignore[arg-type]
+        [],
+        PLACEMENT,
+        ("User.1",),
+        "label",
+        markers=[],
+    )
+
+    assert ("remove_items", 2) in board.calls
+    assert board.visibility_calls == []
+
+
+def test_refused_overlays_leave_visibility_alone(tmp_path, monkeypatch):
+    def refuse(board, items):
+        raise CreateItemsError("no overlapping layers")
+
+    monkeypatch.setattr(overlay, "create_checked", refuse)
+    board = ImageBoard()
+
+    overlay.place_overlays(
+        board,  # type: ignore[arg-type]
+        [image(tmp_path)],
+        PLACEMENT,
+        ("User.1",),
+        "label",
+    )
+
+    assert board.visibility_calls == []
+
+
+def test_failing_to_show_overlay_layers_only_warns(tmp_path, monkeypatch, log):
+    monkeypatch.setattr(overlay, "create_checked", lambda board, items: None)
+
+    class BusyBoard(ImageBoard):
+        def get_visible_layers(self):
+            raise ApiError("busy", code=ApiStatusCode.AS_BUSY)
+
+    board = BusyBoard()
+
+    assert overlay.place_overlays(
+        board,  # type: ignore[arg-type]
+        [image(tmp_path)],
+        PLACEMENT,
+        ("User.1",),
+        "label",
+    )
+
+    assert ("push_commit", "label") in board.calls
+    assert any("User.1" in line and "visible" in line for line in log)
+
+
+def test_failing_to_set_overlay_layers_visible_only_warns(tmp_path, monkeypatch, log):
+    monkeypatch.setattr(overlay, "create_checked", lambda board, items: None)
+
+    class RefusingBoard(ImageBoard):
+        def set_visible_layers(self, layers):
+            raise ApiError("busy", code=ApiStatusCode.AS_BUSY)
+
+    board = RefusingBoard()
+
+    assert overlay.place_overlays(
+        board,  # type: ignore[arg-type]
+        [image(tmp_path)],
+        PLACEMENT,
+        ("User.1",),
+        "label",
+    )
+
+    assert ("push_commit", "label") in board.calls
+    assert "drop_commit" not in board.calls
+    assert any("User.1" in line and "visible" in line for line in log)
+
+
 class ClearBoard:
     """A board with an Edge.Cuts outline, Eco2 markers and reference images."""
 
@@ -785,6 +932,13 @@ class ClearBoard:
         self.shapes = [*outline, eco2_shape()]
         self.images = images
         self.removed: list = []
+        self.visibility_calls: list = []
+
+    def get_visible_layers(self):
+        return []
+
+    def set_visible_layers(self, layers):
+        self.visibility_calls.append(list(layers))
 
     def get_shapes(self):
         return self.shapes
@@ -848,6 +1002,7 @@ def test_clear_removes_our_overlays_and_keeps_other_images(tmp_path, monkeypatch
     assert moved_breakneck in board.removed
     assert users_own not in board.removed
     assert any(getattr(s, "layer", None) == BL.BL_Eco2_User for s in board.removed)
+    assert board.visibility_calls == []
 
 
 COPPER_4 = (BL.BL_F_Cu, BL.BL_In1_Cu, BL.BL_In2_Cu, BL.BL_B_Cu)

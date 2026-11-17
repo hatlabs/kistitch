@@ -23,6 +23,7 @@ from kipy.proto.common.commands.editor_commands_pb2 import (
     CreateItemsResponse,
     ItemStatusCode,
 )
+from kipy.util.board_layer import canonical_name
 from kipy.util.proto import pack_any
 from kipy.wrapper import Wrapper
 from loguru import logger
@@ -48,7 +49,6 @@ COMMIT_PREFIX = "kistitch"
 
 class MarkerKind(enum.Enum):
     UNFIXABLE = "unfixable"
-    FORCED = "forced"
     UNATTRIBUTED = "unattributed"
 
 
@@ -61,17 +61,14 @@ class Marker:
     extent: float = 0.0
 
 
-# Each kind gets its own glyph so the spots can be told apart on Eco2.
-# UNFIXABLE is a circle; these are unit-square line pairs.
-_GLYPHS: dict[MarkerKind, list[tuple[Point2, Point2]]] = {
-    MarkerKind.FORCED: [((-1, 0), (1, 0)), ((0, -1), (0, 1))],
-    MarkerKind.UNATTRIBUTED: [
-        ((-1, -1), (1, -1)),
-        ((1, -1), (1, 1)),
-        ((1, 1), (-1, 1)),
-        ((-1, 1), (-1, -1)),
-    ],
-}
+# An unfixable spot gets a circle and an unattributed one this square, so the
+# two can be told apart on Eco2. The segments span a unit square.
+_SQUARE: tuple[tuple[Point2, Point2], ...] = (
+    ((-1, -1), (1, -1)),
+    ((1, -1), (1, 1)),
+    ((1, 1), (-1, 1)),
+    ((-1, 1), (-1, -1)),
+)
 
 
 def _nm(v: float) -> int:
@@ -128,7 +125,7 @@ def marker_items(markers: Sequence[Marker]) -> list[kipy.board_types.BoardShape]
             continue
         x, y = m.position
         h = MARKER_HALF_SIZE
-        for (ax, ay), (bx, by) in _GLYPHS[m.kind]:
+        for (ax, ay), (bx, by) in _SQUARE:
             out.append(eco2_segment((x + ax * h, y + ay * h), (x + bx * h, y + by * h)))
     return out
 
@@ -232,10 +229,30 @@ def commit_units(
             + (f" and {len(markers)} markers on User.Eco2" if markers else "")
             + (f", replacing {len(stale)} earlier marker shapes" if stale else "")
         )
+        if markers:
+            show_layers(board, [MARKER_LAYER])
 
     if refill:
         refill_after_commit(kicad, board)
     return len(created)
+
+
+def show_layers(
+    board: kipy.board.Board, layers: Sequence[BoardLayer.ValueType]
+) -> None:
+    """Make `layers` visible in the editor, keeping every visible layer.
+
+    KiCad replaces the whole visible set. This runs after a commit landed,
+    so a failure only warns.
+    """
+    names = ", ".join(canonical_name(L) for L in layers)
+    try:
+        visible = list(board.get_visible_layers())
+        hidden = [L for L in layers if L not in visible]
+        if hidden:
+            board.set_visible_layers(visible + hidden)
+    except (ApiError, KiCadConnectionError) as e:
+        logger.warning(f"Could not make {names} visible in KiCad ({e})")
 
 
 def push_tolerant(board: kipy.board.Board, commit: Commit, label: str) -> bool:

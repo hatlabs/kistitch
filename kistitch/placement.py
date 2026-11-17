@@ -84,9 +84,6 @@ def markers_for(
         else []
     )
     out += [
-        Marker(u.position, MarkerKind.FORCED) for u in result.plan.units if u.forced
-    ]
-    out += [
         Marker(v.items[0].position, MarkerKind.UNATTRIBUTED)
         for v in result.unattributed
         if v.items
@@ -117,6 +114,9 @@ def log_summary(
     forced = [u for u in units if u.forced]
     if forced:
         logger.warning(f"  {len(forced)} forced vias")
+    for u in forced:
+        x, y = u.position
+        logger.warning(f"  forced via: {u.net} at ({x:.3f}, {y:.3f})")
     for f in result.forced:
         logger.warning(f"  forced via violation: {f.violation}")
     for v in result.unattributed:

@@ -29,11 +29,13 @@ from kipy.util.board_layer import (
 from loguru import logger
 
 from kistitch.commit import (
+    MARKER_LAYER,
     CreateItemsError,
     Marker,
     create_checked,
     marker_items,
     marker_shapes,
+    show_layers,
 )
 from kistitch.plan import POURSTITCH_PIXEL, raster_size
 from kistitch.snapshot import NM_PER_MM, Point2, Snapshot
@@ -272,9 +274,9 @@ def place_overlays(
     overlays of earlier builds. With no images, the previous set is only
     removed; with nothing to remove either, nothing is committed. Other
     reference images on those layers are left alone. `markers`, unless None,
-    replace every shape on the marker layer in the same commit. If KiCad
-    refuses an item, nothing changes and the log says where to place the
-    PNGs by hand.
+    replace every shape on the marker layer in the same commit. The layers
+    that gain images or markers are made visible. If KiCad refuses an item,
+    nothing changes and the log says where to place the PNGs by hand.
     """
     old = overlays_on(board, overlay_layers, placement)
     stale = marker_shapes(board.get_shapes()) if markers is not None else []
@@ -298,6 +300,14 @@ def place_overlays(
         board.drop_commit(commit)
         raise
     board.push_commit(commit, commit_label)
+    shown = [
+        layer_from_canonical_name(L)
+        for L in dict.fromkeys(i.overlay_layer for i in images)
+    ]
+    if markers:
+        shown.append(MARKER_LAYER)
+    if shown:
+        show_layers(board, shown)
     if images:
         logger.info(
             f"Placed {len(images)} overlay images"

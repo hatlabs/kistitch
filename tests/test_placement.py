@@ -91,6 +91,7 @@ class RecordingBoard:
         self.edges = edge_cuts(SQUARE)
         self.shapes = []
         self.removed = []
+        self.visible = [BL.BL_F_Cu, BL.BL_Edge_Cuts]
 
     def __getattr__(self, attr):
         def record(*args, **kwargs):
@@ -129,6 +130,13 @@ class RecordingBoard:
 
     def refill_zones(self, block=True, max_poll_seconds=0):
         self.calls.append("refill_zones")
+
+    def get_visible_layers(self):
+        return list(self.visible)
+
+    def set_visible_layers(self, layers):
+        self.calls.append(("set_visible_layers", list(layers)))
+        self.visible = list(layers)
 
 
 class FakeKiCad:
@@ -493,6 +501,7 @@ def test_split_commits_with_a_marker_at_the_split_by_default(
     assert placement.markers_for(result.prune) == (
         Marker((20, 20), MarkerKind.UNATTRIBUTED),
     )
+    assert commit.MARKER_LAYER in board.visible
 
 
 @pytest.mark.parametrize(
@@ -622,8 +631,8 @@ def test_commit_creates_items_and_markers_in_one_commit():
     assert via.net.name == "GND"
     assert track.layer == BL.BL_F_Cu and track.width == 300_000
     assert all(m.layer == BL.BL_Eco2_User for m in marks)
-    pushes = [c for c in board.calls if isinstance(c, tuple)]
-    assert len(pushes) == 1 and pushes[0][1].startswith("kistitch pourstitch ")
+    (push,) = pushes(board)
+    assert push[1].startswith("kistitch pourstitch ")
     assert board.calls.count("begin_commit") == 1
     assert created == 3
 
@@ -726,6 +735,125 @@ def test_refill_error_after_the_commit_is_only_a_warning(log):
     assert any(line.startswith("WARNING") and "refill" in line for line in log)
 
 
+def visibility_changes(board):
+    return [
+        c for c in board.calls if isinstance(c, tuple) and c[0] == "set_visible_layers"
+    ]
+
+
+def test_commit_with_markers_shows_the_marker_layer_keeping_visible_ones():
+    board = RecordingBoard()
+    before = list(board.visible)
+
+    commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "x",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    assert set(board.visible) == {*before, commit.MARKER_LAYER}
+    assert len(visibility_changes(board)) == 1
+
+
+def test_commit_with_marker_layer_already_visible_leaves_visibility_alone():
+    board = RecordingBoard()
+    board.visible.append(commit.MARKER_LAYER)
+
+    commit.commit_units(
+        FakeKiCad(board), board, "x", [], [Marker((9, 9), MarkerKind.UNATTRIBUTED)]
+    )
+
+    assert visibility_changes(board) == []
+
+
+def test_commit_only_removing_markers_leaves_visibility_alone():
+    board = RecordingBoard()
+    (stale,) = commit.marker_items([Marker((7, 7), MarkerKind.UNFIXABLE)])
+
+    commit.commit_units(FakeKiCad(board), board, "x", [unit(1, 1)], [], [stale])
+
+    assert board.removed == [stale]
+    assert visibility_changes(board) == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ApiError("busy", code=ApiStatusCode.AS_BUSY),
+        ConnectionError("timed out"),
+    ],
+)
+def test_failing_to_show_the_marker_layer_after_the_commit_only_warns(log, error):
+    class HiddenBoard(RecordingBoard):
+        def get_visible_layers(self):
+            raise error
+
+    board = HiddenBoard()
+
+    created = commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "x",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    assert created == 1
+    assert len(pushes(board)) == 1
+    assert any(
+        line.startswith("WARNING") and "Eco2" in line and "visible" in line
+        for line in log
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ApiError("busy", code=ApiStatusCode.AS_BUSY),
+        ConnectionError("timed out"),
+    ],
+)
+def test_failing_to_set_the_visible_layers_after_the_commit_only_warns(log, error):
+    class RefusingBoard(RecordingBoard):
+        def set_visible_layers(self, layers):
+            raise error
+
+    board = RefusingBoard()
+
+    created = commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "x",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    assert created == 1
+    assert len(pushes(board)) == 1
+    assert "drop_commit" not in board.calls
+    assert any(
+        line.startswith("WARNING") and "Eco2" in line and "visible" in line
+        for line in log
+    )
+
+
+def test_push_timeout_with_markers_leaves_visibility_alone():
+    # Whether the markers landed is unknown, so their layer stays as it was.
+    board = PushFailingBoard(ConnectionError("timed out"))
+
+    commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "x",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    assert visibility_changes(board) == []
+
+
 def test_commit_with_unknown_net_fails_before_opening_a_commit():
     board = RecordingBoard()
 
@@ -742,14 +870,10 @@ def test_commit_label_carries_command_and_timestamp():
     )
 
 
-@pytest.mark.parametrize(
-    "kind, segments",
-    [(MarkerKind.FORCED, 2), (MarkerKind.UNATTRIBUTED, 4)],
-)
-def test_marker_glyphs_are_centred_on_the_spot(kind, segments):
-    items = commit.marker_items([Marker((10, 20), kind)])
+def test_unattributed_marker_is_a_square_centred_on_the_spot():
+    items = commit.marker_items([Marker((10, 20), MarkerKind.UNATTRIBUTED)])
 
-    assert len(items) == segments
+    assert len(items) == 4
     assert all(isinstance(s, kipy.board_types.BoardSegment) for s in items)
     xs = [p.x for s in items for p in (s.start, s.end)]
     ys = [p.y for s in items for p in (s.start, s.end)]
@@ -768,7 +892,7 @@ def test_unfixable_marker_is_an_unfilled_circle_on_the_spot():
     assert item.proto.shape.attributes.fill.fill_type == base_types_pb2.GFT_UNFILLED
 
 
-def test_markers_for_unfixable_forced_and_unattributed():
+def test_markers_for_marks_unfixable_and_unattributed_but_not_forced():
     forced = PlannedUnit((2, 2), "GND", VIA, forced=True)
 
     result = drc.PruneResult(
@@ -789,16 +913,37 @@ def test_markers_for_unfixable_forced_and_unattributed():
 
     assert [(m.position, m.kind) for m in markers] == [
         ((3, 3), MarkerKind.UNFIXABLE),
-        ((2, 2), MarkerKind.FORCED),
         ((4, 4), MarkerKind.UNATTRIBUTED),
     ]
 
     without_unfixable = placement.markers_for(result, mark_unfixable=False)
 
-    assert [m.kind for m in without_unfixable] == [
-        MarkerKind.FORCED,
-        MarkerKind.UNATTRIBUTED,
-    ]
+    assert [m.kind for m in without_unfixable] == [MarkerKind.UNATTRIBUTED]
+
+
+def test_summary_lists_each_forced_via_at_warning(log):
+    # A forced via that meets the clearance rule has no DRC violation and no
+    # marker, so the log is the only record of where it is.
+    result = drc.PruneResult(
+        plan=Plan(
+            units=(
+                unit(1, 1),
+                PlannedUnit((2.5, 3.25), "GND", VIA, forced=True),
+                PlannedUnit((4, 5), "GND2", VIA, forced=True),
+            )
+        ),
+        dropped=(),
+        forced=(),
+        unattributed=(),
+        rounds=1,
+    )
+
+    placement.log_summary("returnvia", result)
+
+    warnings = [line for line in log if line.startswith("WARNING")]
+    assert any("2 forced vias" in line for line in warnings)
+    assert any("forced via: GND at (2.500, 3.250)" in line for line in warnings)
+    assert any("forced via: GND2 at (4.000, 5.000)" in line for line in warnings)
 
 
 # ---- refill --------------------------------------------------------------------
