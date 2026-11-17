@@ -225,6 +225,9 @@ class StepCard(QWidget):
 
     def _view_button(self) -> QToolButton:
         button = QToolButton()
+        # Match the other step buttons; some platforms give tool buttons a
+        # smaller font.
+        button.setFont(QApplication.font("QPushButton"))
         button.setText("Heatmap")
         button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         button.clicked.connect(lambda: self.controller.heatmap(Step.RETURN))
@@ -929,6 +932,7 @@ def start_thread(work: Callable[[], None], *, daemon: bool) -> None:
 def main() -> None:
     """Open the panel and run until it is closed."""
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     window = PanelWindow(Prober(), run_job, spawn=start_thread)
     window.show()
     window.raise_()
