@@ -41,7 +41,7 @@ class RunSettings:
     # Off where the command reports uncovered areas another way (a heatmap)
     # and per-spot markers and warnings would only be noise.
     mark_unfixable: bool = True
-    allow_splits: bool = False
+    allow_splits: bool = True
 
 
 class SplitError(RuntimeError):
@@ -193,7 +193,7 @@ def run_placement(
 def _check_splits(
     result: drc.PruneResult, settings: RunSettings, runner: drc.DrcRunner
 ) -> None:
-    """Refuse to commit a plan that disconnects copper, unless allowed.
+    """Refuse to commit a plan that disconnects copper, if splits aren't allowed.
 
     Other nets' pours are not obstacles, so one via can cut a narrow neck
     of a pour. DRC then names the pour's pads or zones, never the via, and
@@ -222,11 +222,12 @@ def _check_splits(
         "planned via; a via may split another net's pour"
     )
     if settings.dry_run:
-        logger.error(f"{message}; a real run would refuse to commit")
+        outcome = "commit with markers" if settings.allow_splits else "refuse to commit"
+        logger.error(f"{message}; a real run would {outcome}")
     elif settings.allow_splits:
-        logger.warning(f"{message}; committing anyway (--allow-splits)")
+        logger.warning(f"{message}; committing anyway, with markers")
     else:
         raise SplitError(
-            f"{message}. Nothing committed; fix the board or rerun with "
-            "--allow-splits to commit with markers"
+            f"{message}. Nothing committed; fix the board or rerun without "
+            "--no-allow-splits to commit with markers"
         )
