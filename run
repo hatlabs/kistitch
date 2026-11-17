@@ -58,7 +58,7 @@ function check {
 # Version Commands
 
 function bumpversion {
-  #@ Bump the version in VERSION and pyproject.toml (patch|minor|major)
+  #@ Bump the version in VERSION, pyproject.toml, uv.lock and the launcher's REQUIRED_VERSION (patch|minor|major)
   #@ Category: Version
   local BUMP_TYPE="${1:-}"
 
