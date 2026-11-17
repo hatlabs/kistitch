@@ -1,6 +1,6 @@
 # Kistitch: Via Stitching for KiCad Layouts
 
-Formerly [breakneck](https://pypi.org/project/breakneck/). To switch an installed tool, run `uv tool uninstall breakneck && uv tool install kistitch`. The neckdown command `cut` is gone; breakneck 0.4.x still has it.
+Formerly [breakneck](https://pypi.org/project/breakneck/). To switch an installed tool, run `uv tool uninstall breakneck && uv tool install --python 3.14 kistitch`. The neckdown command `cut` is gone; breakneck 0.4.x still has it.
 
 ## Introduction
 
@@ -66,27 +66,37 @@ Ground plane coverage on In1.Cu, following the `pourstitch --power` and `returnv
 
 ## Installation
 
-As a prerequisite, [install uv](https://docs.astral.sh/uv/getting-started/installation/).
+Kistitch installs from KiCad's Plugin and Content Manager:
+
+1. In the Plugin and Content Manager, open Manage repositories and add `https://github.com/hatlabs/kistitch/releases/download/pcm/repository.json`.
+2. Choose kistitch in the repository list at the top of the window; adding a repository does not show it. Install kistitch from the Plugins tab and apply the changes.
+3. Open a board in the PCB editor and press the kistitch button in the toolbar.
+
+Kistitch runs outside KiCad. The first press of the button offers to install [uv](https://docs.astral.sh/uv/) and kistitch with the panel, which needs an internet connection, and installs nothing until you agree. Later presses open [the panel](#the-panel), or bring it to the front.
+
+Kistitch needs KiCad 10 and kicad-python 0.8 or later, with the KiCad API enabled (see [KiCad Configuration](#kicad-configuration)).
+
+### Without the plugin manager
+
+Kistitch is on PyPI. As a prerequisite, [install uv](https://docs.astral.sh/uv/getting-started/installation/). The commands below name Python 3.14: uv otherwise picks the newest Python, and one of kistitch's dependencies has no packages for 3.15 yet.
 
 To run kistitch without actually installing it:
 
 ```
-uvx kistitch <command> [options...]
+uvx --python 3.14 kistitch <command> [options...]
 ```
 
 To install kistitch as a tool:
 
 ```
-uv tool install kistitch
+uv tool install --python 3.14 kistitch
 ```
 
 To install it with the panel (see [The panel](#the-panel)), which needs Qt:
 
 ```
-uv tool install 'kistitch[gui]'
+uv tool install --python 3.14 'kistitch[gui]'
 ```
-
-Kistitch needs KiCad 10 and kicad-python 0.8 or later.
 
 ## KiCad Configuration
 
@@ -96,7 +106,7 @@ Only one KiCad instance can serve the API at a time. Close other KiCad windows i
 
 ## Usage
 
-**NOTE:** If you are running kistitch with `uvx`, prepend all kistitch commands below with `uvx`.
+**NOTE:** If you are running kistitch with `uvx`, prepend all kistitch commands below with `uvx --python 3.14`.
 
 Run `kistitch -h`, or `kistitch <command> -h`, to see the available options.
 
@@ -183,7 +193,7 @@ kistitch pourstitch --check --overlay
 
 ### The panel
 
-`kistitch-panel` opens a window beside KiCad's PCB editor that runs the steps above on the open board, one action at a time, and keeps each step's latest result in view. It needs the `gui` extra (see [Installation](#installation)); without it, the command says how to install it.
+`kistitch-panel` opens a window beside KiCad's PCB editor that runs the steps above on the open board, one action at a time, and keeps each step's latest result in view. The kistitch button in the PCB editor toolbar starts it (see [Installation](#installation)). Run from the command line, it needs the `gui` extra (see [Without the plugin manager](#without-the-plugin-manager)); without it, the command says how to install it.
 
 ```bash
 kistitch-panel
@@ -214,13 +224,14 @@ Under each step, its status line gives the step's latest Heatmap or Place in thi
 Development needs [uv](https://docs.astral.sh/uv/). The `run` script holds the development commands; `./run help` lists them.
 
 ```
-./run sync       # dependencies and the gui extra
-./run test       # the tests; extra arguments go to pytest
-./run check      # lint and the tests, as CI does
+./run sync                         # dependencies and the gui extra
+./run test                         # the tests; extra arguments go to pytest
+./run check                        # lint and the tests, as CI does
+./run pcm-package v<VERSION>+<N>   # the plugin's PCM files, into dist/pcm
 ```
 
 Tests never need a running KiCad. The panel's widget tests run on Qt's offscreen platform and are skipped without the `gui` extra.
 
 ### Releasing
 
-Every merge to main stages a release: a pre-release tagged `v<VERSION>+<N>_pre` and a draft `v<VERSION>+<N>`, where N counts the builds of that version. Publishing the draft on GitHub builds the wheel and the sdist and uploads them to PyPI as version `<VERSION>`. PyPI takes each version once, so a release of a version already there uploads nothing: bump the version with `./run bumpversion patch|minor|major` (needs `uv tool install bump2version`) before the release. It updates `VERSION`, `pyproject.toml` and `uv.lock`.
+Every merge to main stages a release: a pre-release tagged `v<VERSION>+<N>_pre` and a draft `v<VERSION>+<N>`, where N counts the builds of that version. Publishing the draft on GitHub builds the wheel and the sdist and uploads them to PyPI as version `<VERSION>`. PyPI takes each version once, so a release of a version already there uploads nothing. Once its version is on PyPI, the release also publishes the KiCad Plugin and Content Manager files that `./run pcm-package` builds, unless the index already lists that version or a newer one: the plugin's zip, `packages.json` and the resources archive go on the release, and its `repository.json`, which points at them, replaces the previous one in the pre-release tagged `pcm`, which users add as `https://github.com/hatlabs/kistitch/releases/download/pcm/repository.json`. A rerun of a release whose plugin step failed publishes the plugin then. A change to the plugin ships only with a version bump. Bump the version with `./run bumpversion patch|minor|major` (needs `uv tool install bump2version`) before the release. It updates `VERSION`, `pyproject.toml`, `uv.lock` and the version the plugin's launcher requires.

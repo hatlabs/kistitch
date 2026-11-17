@@ -9,6 +9,7 @@ board KiCad shows and its nets when the window is activated or on Retry.
 Every worker callback reaches the controller through a "post to the
 controller's thread" callable. `present` words results and errors.
 `window` draws the controller and forwards clicks to it, with the
-building blocks in `widgets`; only these two import Qt, which comes with
-the `gui` extra.
+building blocks in `widgets`. `instance` keeps one panel per KiCad
+instance: a second start for the same KiCad brings the open panel forward
+and exits. Only these three import Qt, which comes with the `gui` extra.
 """

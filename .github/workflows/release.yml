@@ -2,7 +2,8 @@
 #
 # On a published stable release: check the release, build and smoke-test the
 # wheel and the sdist (build.yml), then upload them. Only the upload job
-# holds the OIDC token; nothing it runs comes from the build.
+# holds the OIDC token; nothing it runs comes from the build. Then publish
+# the KiCad PCM package and repository index.
 name: Publish stable release
 
 on:
@@ -106,3 +107,113 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           skip-existing: true
+
+  # KiCad's Plugin and Content Manager reads kistitch's repository from
+  # releases/download/pcm/repository.json: a fixed pre-release, never latest,
+  # whose repository.json each new version replaces. The plugin zip,
+  # packages.json and the resources archive go on the stable release, so the
+  # replaced file always names files that exist with matching hashes. The
+  # launcher installs kistitch of this version from PyPI, so this runs once
+  # the version is there, uploaded by this run or an earlier one. It publishes
+  # only a version newer than the one the index lists, so a rerun after a
+  # failure finishes the job, a rerun of an older release cannot roll the
+  # index back, and a launcher change needs a VERSION bump.
+  pcm:
+    needs: [check, publish]
+    if: >-
+      always() && needs.check.result == 'success' &&
+      (needs.publish.result == 'success' || needs.check.outputs.publish == 'false')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Two releases must not interleave their index reads and uploads.
+    concurrency:
+      group: ${{ github.repository }}-pcm-index
+      cancel-in-progress: false
+    env:
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name }}
+      INDEX_TAG: pcm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare with the published index
+        id: index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          LISTED=""
+          if err=$(gh release download "$INDEX_TAG" --pattern repository.json --output current.json --clobber 2>&1); then
+            PACKAGES=$(jq -r .packages.url current.json)
+            LISTED=$(curl -sSfL --max-time 30 --retry 3 --retry-all-errors "$PACKAGES" \
+              | jq -r '.packages[].versions[].version' | sort -V | tail -n1)
+          elif [[ $err != *"release not found"* && $err != *"no assets match"* && $err != *"no assets to download"* ]]; then
+            echo "::error::Reading the index in release $INDEX_TAG failed: $err"
+            exit 1
+          fi
+          NEWEST=$(printf '%s\n' "$LISTED" "$VERSION" | sort -V | tail -n1)
+          if [ -n "$LISTED" ] && { [ "$LISTED" = "$VERSION" ] || [ "$NEWEST" != "$VERSION" ]; }; then
+            echo "::notice::The index lists kistitch $LISTED; not publishing the plugin of $VERSION"
+            echo "update=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "The index lists ${LISTED:-nothing}; publishing the plugin of $VERSION"
+            echo "update=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up uv
+        if: steps.index.outputs.update == 'true'
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      # The script needs only the standard library, so no sync.
+      - name: Build the PCM files
+        if: steps.index.outputs.update == 'true'
+        run: uv run --no-project --python 3.14 python scripts/pcm_package.py "$TAG" --out dist/pcm
+
+      - name: Create the index release
+        if: steps.index.outputs.update == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! err=$(gh release view "$INDEX_TAG" --json tagName 2>&1 >/dev/null); then
+            if [[ $err != *"release not found"* ]]; then
+              echo "::error::Reading release $INDEX_TAG failed: $err"
+              exit 1
+            fi
+            URL="https://github.com/$GH_REPO/releases/download/$INDEX_TAG/repository.json"
+            gh release create "$INDEX_TAG" --prerelease --latest=false \
+              --target "$GITHUB_SHA" --title "KiCad plugin repository" \
+              --notes "The KiCad Plugin and Content Manager repository of kistitch, not a kistitch release. Every new kistitch version replaces its files. To install kistitch in KiCad, add $URL in the Plugin and Content Manager's Manage repositories."
+          fi
+
+      # repository.json goes last, after the files it holds the hashes of.
+      # --clobber lets a rerun replace files a failed run left behind. The
+      # index is uploaded under another name and then renamed, because
+      # --clobber deletes before it uploads and a failed upload would leave
+      # no index at all.
+      - name: Upload the package and the index
+        if: steps.index.outputs.update == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          gh release upload "$TAG" "dist/pcm/kistitch-pcm-$VERSION.zip" \
+            dist/pcm/packages.json dist/pcm/kistitch-pcm-resources.zip --clobber
+          mkdir -p dist/pcm-index
+          cp dist/pcm/repository.json dist/pcm-index/repository.json.new
+          gh release upload "$INDEX_TAG" dist/pcm-index/repository.json.new --clobber
+          asset_id() {
+            gh api "repos/$GH_REPO/releases/tags/$INDEX_TAG" --jq ".assets[] | select(.name == \"$1\") | .id"
+          }
+          NEW=$(asset_id repository.json.new)
+          if [ -z "$NEW" ]; then
+            echo "::error::repository.json.new is not in release $INDEX_TAG"
+            exit 1
+          fi
+          OLD=$(asset_id repository.json)
+          if [ -n "$OLD" ]; then
+            gh api -X DELETE "repos/$GH_REPO/releases/assets/$OLD"
+          fi
+          gh api -X PATCH "repos/$GH_REPO/releases/assets/$NEW" -f name=repository.json > /dev/null

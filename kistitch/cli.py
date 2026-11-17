@@ -1,4 +1,5 @@
 import argparse
+import importlib.metadata
 import os
 import sys
 from collections.abc import Iterator
@@ -194,6 +195,7 @@ def execute_returnvia(args):
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    _add_version(parser)
 
     parser.add_argument(
         "--dry-run",
@@ -381,8 +383,23 @@ def configure_logging() -> None:
 
 GUI_EXTRA_MESSAGE = (
     "The panel needs PySide6, which comes with the `gui` extra: "
-    "uv tool install 'kistitch[gui]'"
+    "uv tool install --python 3.14 'kistitch[gui]'"
 )
+GUI_EXTRA_EXIT = 3
+"""`kistitch-panel`'s exit code without the `gui` extra, apart from a
+failure (1) and a usage error (2): the KiCad plugin's launcher keys on it
+to offer adding the extra, and keeps its own copy, since it cannot import
+kistitch."""
+
+
+def _add_version(parser: argparse.ArgumentParser) -> None:
+    """`--version`, printing `kistitch X.Y.Z`: the plugin's launcher parses
+    that line to check the installed version."""
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"kistitch {importlib.metadata.version('kistitch')}",
+    )
 
 
 def parse_panel_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -393,6 +410,7 @@ def parse_panel_args(argv: list[str] | None = None) -> argparse.Namespace:
         "return vias and ground stitching, with their heatmaps, and clears "
         "markers, heatmaps and stitching vias. Needs the gui extra.",
     )
+    _add_version(parser)
     return parser.parse_args(argv)
 
 
@@ -403,9 +421,10 @@ def panel_main(argv: list[str] | None = None) -> None:
     try:
         from kistitch.panel.window import main as open_panel
     except ImportError as e:
-        if not (e.name or "").startswith("PySide6"):
+        if (e.name or "").partition(".")[0] != "PySide6":
             raise
-        raise SystemExit(f"{GUI_EXTRA_MESSAGE} ({e})") from None
+        logger.error(f"{GUI_EXTRA_MESSAGE} ({e})")
+        raise SystemExit(GUI_EXTRA_EXIT) from None
     open_panel()
 
 
