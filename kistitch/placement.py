@@ -84,9 +84,6 @@ def markers_for(
         else []
     )
     out += [
-        Marker(u.position, MarkerKind.FORCED) for u in result.plan.units if u.forced
-    ]
-    out += [
         Marker(v.items[0].position, MarkerKind.UNATTRIBUTED)
         for v in result.unattributed
         if v.items

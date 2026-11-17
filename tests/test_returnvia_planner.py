@@ -4,7 +4,7 @@ from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
 from kistitch import drc
-from kistitch.placement import MarkerKind, markers_for
+from kistitch.placement import markers_for
 from kistitch.returnpath import Outcome, measure_returns
 from kistitch.returnvia import ReturnViaOptions
 from kistitch.returnvia_command import with_returns
@@ -206,7 +206,7 @@ def crowded():
     ]
 
 
-def test_forced_via_leaves_its_via_unserved_and_marked():
+def test_forced_via_leaves_its_via_unserved_and_unmarked():
     snap = board([SIG], tracks=crowded())
 
     result = plan(snap, force=True)
@@ -215,9 +215,7 @@ def test_forced_via_leaves_its_via_unserved_and_marked():
     assert u.forced
     assert unserved(check(snap, result)) == {SIG}
     prune = drc.PruneResult(result, (), (), (), 1)
-    assert (u.position, MarkerKind.FORCED) in {
-        (m.position, m.kind) for m in markers_for(prune, True)
-    }
+    assert u.position not in {m.position for m in markers_for(prune, True)}
 
 
 def test_no_ground_fill_end_is_unfixable_and_never_planned():

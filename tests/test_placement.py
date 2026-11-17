@@ -742,14 +742,10 @@ def test_commit_label_carries_command_and_timestamp():
     )
 
 
-@pytest.mark.parametrize(
-    "kind, segments",
-    [(MarkerKind.FORCED, 2), (MarkerKind.UNATTRIBUTED, 4)],
-)
-def test_marker_glyphs_are_centred_on_the_spot(kind, segments):
-    items = commit.marker_items([Marker((10, 20), kind)])
+def test_unattributed_marker_is_a_square_centred_on_the_spot():
+    items = commit.marker_items([Marker((10, 20), MarkerKind.UNATTRIBUTED)])
 
-    assert len(items) == segments
+    assert len(items) == 4
     assert all(isinstance(s, kipy.board_types.BoardSegment) for s in items)
     xs = [p.x for s in items for p in (s.start, s.end)]
     ys = [p.y for s in items for p in (s.start, s.end)]
@@ -768,7 +764,7 @@ def test_unfixable_marker_is_an_unfilled_circle_on_the_spot():
     assert item.proto.shape.attributes.fill.fill_type == base_types_pb2.GFT_UNFILLED
 
 
-def test_markers_for_unfixable_forced_and_unattributed():
+def test_markers_for_marks_unfixable_and_unattributed_but_not_forced():
     forced = PlannedUnit((2, 2), "GND", VIA, forced=True)
 
     result = drc.PruneResult(
@@ -789,16 +785,12 @@ def test_markers_for_unfixable_forced_and_unattributed():
 
     assert [(m.position, m.kind) for m in markers] == [
         ((3, 3), MarkerKind.UNFIXABLE),
-        ((2, 2), MarkerKind.FORCED),
         ((4, 4), MarkerKind.UNATTRIBUTED),
     ]
 
     without_unfixable = placement.markers_for(result, mark_unfixable=False)
 
-    assert [m.kind for m in without_unfixable] == [
-        MarkerKind.FORCED,
-        MarkerKind.UNATTRIBUTED,
-    ]
+    assert [m.kind for m in without_unfixable] == [MarkerKind.UNATTRIBUTED]
 
 
 # ---- refill --------------------------------------------------------------------

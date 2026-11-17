@@ -48,7 +48,6 @@ COMMIT_PREFIX = "kistitch"
 
 class MarkerKind(enum.Enum):
     UNFIXABLE = "unfixable"
-    FORCED = "forced"
     UNATTRIBUTED = "unattributed"
 
 
@@ -64,7 +63,6 @@ class Marker:
 # Each kind gets its own glyph so the spots can be told apart on Eco2.
 # UNFIXABLE is a circle; these are unit-square line pairs.
 _GLYPHS: dict[MarkerKind, list[tuple[Point2, Point2]]] = {
-    MarkerKind.FORCED: [((-1, 0), (1, 0)), ((0, -1), (0, 1))],
     MarkerKind.UNATTRIBUTED: [
         ((-1, -1), (1, -1)),
         ((1, -1), (1, 1)),
