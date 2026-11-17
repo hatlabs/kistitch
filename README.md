@@ -105,10 +105,10 @@ kistitch pourstitch --overlay
 
 Each placement run:
 
-1. Refills the zones, so the planner sees current fills.
+1. Refills the zones, so the planner sees current fills (see [Zone refills](#zone-refills)).
 2. Plans the vias from a snapshot of the board.
 3. Checks the plan with `kicad-cli pcb drc` on a temporary copy of the board, against a DRC run on an unmodified copy. Vias implicated in new violations are dropped, and the planner tries again without those spots, for up to five rounds.
-4. Commits the remaining vias, their stubs and any markers as one undo step, replacing the markers of earlier runs, then refills the zones. If the board was edited in KiCad while the run was going, nothing is committed and the run has to be repeated.
+4. Commits the remaining vias, their stubs and any markers as one undo step, replacing the markers of earlier runs, then refills the zones unless refills are off. If the board was edited in KiCad while the run was going, nothing is committed and the run has to be repeated.
 
 Spots that need attention get markers on User.Eco2:
 
@@ -144,13 +144,17 @@ Notes:
 
 ### Clearing stitching vias
 
-`kistitch clear --vias` removes stitching vias along with the markers and overlays, so `pourstitch` and `returnvia` can place a fresh set after layout changes. A via goes when it touches a fill of its own net on at least one layer and no track or pad of its net touches it. Vias in pads, fanout vias at the end of a track and locked vias stay. `--nets NET [NET ...]` limits the removal to those nets; by default every net with a zone is cleared. The removal is one undo step, followed by a zone refill. With `--dry-run` it logs how many vias per net would go and removes nothing.
+`kistitch clear --vias` removes stitching vias along with the markers and overlays, so `pourstitch` and `returnvia` can place a fresh set after layout changes. A via goes when it touches a fill of its own net on at least one layer and no track or pad of its net touches it. Vias in pads, fanout vias at the end of a track and locked vias stay. `--nets NET [NET ...]` limits the removal to those nets; by default every net with a zone is cleared. The removal is one undo step, followed by a zone refill unless refills are off. With `--dry-run` it logs how many vias per net would go and removes nothing.
 
 **This removes every via touching a pour of its own net that no track or pad ties down, including vias placed by hand.** That includes fanout vias tied to a pad only through a pour, and vias that are the only link between two pours of the same net. To keep such a via, connect it with a short track or lock it. To restore a board after clearing, run `clear --vias`, then `padvia` (it re-adds a via with a stub track for each SMD pad, and the stubs keep those vias through later clears), then the three stitching steps above: `pourstitch --power`, `returnvia` and `pourstitch`.
 
+### Zone refills
+
+By default kistitch refills the zones before measuring or placing, after committing and after `clear --vias`, so every run works from current fills and leaves the board filled. Each refill adds an undo step in KiCad, so undoing a placement takes one Ctrl+Z for the refill after the commit and one for the commit. `kistitch --no-refill <command>` turns all of these off: the run uses the zone fills as they are and logs that once, and refilling in KiCad (press B) after edits is up to you. With stale fills, the planner and heatmaps see the old copper. DRC is unaffected: it refills its own copy of the board.
+
 ### Dry runs
 
-`kistitch --dry-run <command>` plans, runs DRC, logs what it would place and writes `--render` output, but commits no vias or markers. The zone refill before planning still runs, and `--overlay` still places its images, together with the markers of a `--check` run. The heatmaps include the planned vias: for `returnvia` they count as returns, except forced ones, so a dry run shows which via ends the run would leave unserved.
+`kistitch --dry-run <command>` plans, runs DRC, logs what it would place and writes `--render` output, but commits no vias or markers. The zone refill before planning still runs, unless refills are off, and `--overlay` still places its images, together with the markers of a `--check` run. The heatmaps include the planned vias: for `returnvia` they count as returns, except forced ones, so a dry run shows which via ends the run would leave unserved.
 
 ### Heatmaps
 
