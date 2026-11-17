@@ -41,6 +41,7 @@ from kistitch.plan import (
     UnfixableSpot,
     pad_clearance,
 )
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.raster import (
     BoolMap,
     CoverageMap,
@@ -507,10 +508,13 @@ class _PlanBuilder:
 
 
 class PourStitcher:
-    """Planner for `run_placement`; caches the static rasters across rounds."""
+    """Planner for `run_placement`; caches the static rasters across rounds.
 
-    def __init__(self) -> None:
+    Each net planned is a stop point of `progress`."""
+
+    def __init__(self, progress: Progress = NO_PROGRESS) -> None:
         self._ctx: _Context | None = None
+        self._progress = progress
 
     def context(self, snapshot: Snapshot, options: Options) -> _Context:
         ctx = self._ctx
@@ -530,6 +534,7 @@ class PourStitcher:
             blocked[win] |= near
         out = _PlanBuilder([], [])
         for i, net in enumerate(ctx.nets):
+            self._progress.enter(Stage.PLAN, (i + 1, len(ctx.nets)))
             run = _NetRun(ctx, net, blocked, out)
             # Alternate nets sit half a pitch apart so their lattices interleave.
             n_lattice = run.lattice(offset=(i % 2) * options.pitch / 2)
@@ -590,3 +595,20 @@ def summarise(
         unstitchable = int(np.sum(m.excluded)) * area
         out.append(LayerCoverage(m.net, m.layer, n, n * area, unstitchable))
     return out
+
+
+@dataclass(frozen=True)
+class NetCoverage:
+    net: str
+    uncovered_mm2: float
+    unstitchable_mm2: float
+
+
+def by_net(layers: Sequence[LayerCoverage]) -> tuple[NetCoverage, ...]:
+    """Each net's coverage over all its layers, nets in first-seen order."""
+    uncovered: dict[str, float] = {}
+    unstitchable: dict[str, float] = {}
+    for c in layers:
+        uncovered[c.net] = uncovered.get(c.net, 0.0) + c.uncovered_mm2
+        unstitchable[c.net] = unstitchable.get(c.net, 0.0) + c.unstitchable_mm2
+    return tuple(NetCoverage(n, uncovered[n], unstitchable[n]) for n in uncovered)

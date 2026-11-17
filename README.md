@@ -80,6 +80,12 @@ To install kistitch as a tool:
 uv tool install kistitch
 ```
 
+To install it with the panel (see [The panel](#the-panel)), which needs Qt:
+
+```
+uv tool install 'kistitch[gui]'
+```
+
 Kistitch needs KiCad 10 and kicad-python 0.8 or later.
 
 ## KiCad Configuration
@@ -174,6 +180,29 @@ kistitch returnvia --check --render returnvia.png
 kistitch pourstitch --power --check --render power.png
 kistitch pourstitch --check --overlay
 ```
+
+### The panel
+
+`kistitch-panel` opens a window beside KiCad's PCB editor that runs the steps above on the open board, one action at a time, and keeps each step's latest result in view. It needs the `gui` extra (see [Installation](#installation)); without it, the command says how to install it.
+
+```bash
+kistitch-panel
+```
+
+From top to bottom:
+
+- **Ground nets** sets the ground nets of return vias and both stitching steps. It starts with the detected nets, found as for `returnvia`; choose others from the drop-down, and **Use detected** goes back.
+- **Refill zones automatically** is the panel's `--refill`/`--no-refill` (see [Zone refills](#zone-refills)) for every step and for Remove vias.
+- **1 Pad vias**: **Place** runs `padvia`. Adjust the pads by hand before going on.
+- **2 Power stitching**: **Heatmap** places the coverage heatmap, as `pourstitch --power --check --overlay`, and **Place** runs `pourstitch --power`.
+- **3 Return vias**: **Heatmap** shows the unserved vias, as `returnvia --check --overlay`; its menu adds **All copper**, as `--full-map`. **Place** runs `returnvia`.
+- **4 Ground stitching**: **Heatmap** and **Place**, as for power stitching, run `pourstitch` on the ground nets.
+- **Clean up**: **Clear markers and heatmaps** runs `clear`. **Remove vias…** counts the stitching vias on the chosen nets, asks with the count per net, then removes them as `clear --vias` does.
+- The activity area at the bottom shows what is running, with **Cancel (Esc)**, then how it ended. **Details** shows the action's log, which names where DRC dropped a via and where a via was forced, with **Copy**.
+
+The arrow beside a step opens its options, which are the command's: nets, distance, via size (empty for the netclass's), forced vias for return vias, and the fallback via under **More options**. **Restore defaults** resets them. Every placement allows pour splits and marks them, as the CLI does by default; the panel has no dry run.
+
+Under each step, its status line gives the step's latest Heatmap or Place in this session and how long ago, and notes when a later panel action replaced or cleared its markers or heatmap. The panel doesn't re-check a result: after editing the board, run the step again. Cancel stops an action before its commit; from the commit on, it runs to the end. A failed or cancelled action, or one KiCad was too busy for, leaves the status lines as they were. The panel reads the board when its window comes to the front and on **Retry**; when KiCad shows another board, the status lines are cleared.
 
 ## Limitations
 

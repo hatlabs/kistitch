@@ -7,8 +7,9 @@ from shapely.geometry import LineString, Point, box
 
 from kistitch import padvia
 from kistitch.obstacles import Obstacles
-from kistitch.padvia import PadviaOptions, plan_padvia
+from kistitch.padvia import PadviaOptions, PadviaPlanner
 from kistitch.plan import FORBIDDEN_RADIUS, HOLE_TO_HOLE_GAP
+from kistitch.progress import Cancelled, Stage
 from kistitch.snapshot import (
     NM_PER_MM,
     Footprint,
@@ -162,7 +163,7 @@ def r0402(net_a="GND", net_b="SIG"):
 def test_0402_gnd_pad_gets_via_away_from_footprint_centre():
     fp, pads = r0402()
 
-    plan = plan_padvia(snapshot(pads, footprints=[fp]), GND, [])
+    plan = PadviaPlanner()(snapshot(pads, footprints=[fp]), GND, [])
 
     assert len(plan.units) == 1
     u = plan.units[0]
@@ -181,7 +182,7 @@ def test_via_option_overrides_netclass_size():
     fp, pads = r0402()
     big = ViaSize(0.8, 0.4)
 
-    plan = plan_padvia(
+    plan = PadviaPlanner()(
         snapshot(pads, footprints=[fp]), PadviaOptions(("GND",), via=big), []
     )
 
@@ -208,7 +209,7 @@ def test_only_pads_of_requested_nets_and_single_layer_smd_are_candidates():
         ),
     ]
 
-    plan = plan_padvia(snapshot(pads), GND, [])
+    plan = PadviaPlanner()(snapshot(pads), GND, [])
 
     assert len(plan.units) == 1
     assert Point(plan.units[0].position).distance(Point(5, 5)) < 2
@@ -219,7 +220,7 @@ def test_only_pads_of_requested_nets_and_single_layer_smd_are_candidates():
     [(0.25, 0.8, 0.25), (1.0, 1.0, 0.4), (0.15, 0.6, 0.2)],
 )
 def test_stub_width_is_pad_minor_dimension_within_limits(w, h, expected):
-    plan = plan_padvia(snapshot([pad("GND", CENTRE, w, h)]), GND, [])
+    plan = PadviaPlanner()(snapshot([pad("GND", CENTRE, w, h)]), GND, [])
 
     stub = plan.units[0].stub
     assert stub is not None
@@ -234,7 +235,9 @@ def test_pad_joined_to_nearby_via_by_track_is_served():
     via = Via("v", "GND", (11.0, 10.0), 0.6, 0.3)
     joined = track("GND", CENTRE, (11.0, 10.0))
 
-    assert plan_padvia(snapshot([p], tracks=[joined], vias=[via]), GND, []).units == ()
+    assert (
+        PadviaPlanner()(snapshot([p], tracks=[joined], vias=[via]), GND, []).units == ()
+    )
 
 
 def test_nearby_via_without_connecting_copper_does_not_serve():
@@ -245,7 +248,7 @@ def test_nearby_via_without_connecting_copper_does_not_serve():
         zone("GND", ("F.Cu", "B.Cu"), fills={"F.Cu": pour_elsewhere, "B.Cu": BOARD})
     ]
 
-    plan = plan_padvia(snapshot([p], vias=[via], zones=zones), GND, [])
+    plan = PadviaPlanner()(snapshot([p], vias=[via], zones=zones), GND, [])
 
     assert len(plan.units) == 1
 
@@ -254,7 +257,7 @@ def test_pad_and_nearby_via_in_the_same_pour_on_the_pad_layer_is_served():
     p = pad("GND", CENTRE)
     via = Via("v", "GND", (10.8, 10.0), 0.6, 0.3)
 
-    assert plan_padvia(snapshot([p], vias=[via]), GND, []).units == ()
+    assert PadviaPlanner()(snapshot([p], vias=[via]), GND, []).units == ()
 
 
 def test_via_in_a_separate_island_of_the_pad_layer_pour_does_not_serve():
@@ -263,7 +266,7 @@ def test_via_in_a_separate_island_of_the_pad_layer_pour_does_not_serve():
     split = BOARD.difference(box(10.4, 0, 10.45, 20))
     zones = [zone("GND", ("F.Cu", "B.Cu"), fills={"F.Cu": split, "B.Cu": BOARD})]
 
-    plan = plan_padvia(snapshot([p], vias=[via], zones=zones), GND, [])
+    plan = PadviaPlanner()(snapshot([p], vias=[via], zones=zones), GND, [])
 
     assert len(plan.units) == 1
 
@@ -273,7 +276,7 @@ def test_connected_via_beyond_served_distance_does_not_serve():
     via = Via("v", "GND", (13.0, 10.0), 0.6, 0.3)
     joined = track("GND", CENTRE, (13.0, 10.0))
 
-    plan = plan_padvia(snapshot([p], tracks=[joined], vias=[via]), GND, [])
+    plan = PadviaPlanner()(snapshot([p], tracks=[joined], vias=[via]), GND, [])
 
     assert len(plan.units) == 1
 
@@ -299,7 +302,7 @@ def test_pad_joined_through_pour_to_a_nearby_same_net_pth_pad_is_served():
     p = pad("GND", CENTRE)
     pin = pth("GND", (10.0 + 0.25 + 0.19 + 0.85, 10.0))
 
-    plan = plan_padvia(snapshot([p, pin]), GND, [])
+    plan = PadviaPlanner()(snapshot([p, pin]), GND, [])
 
     assert plan.units == ()
     assert plan.unfixable == ()
@@ -311,7 +314,7 @@ def test_nearby_pth_pad_of_another_net_does_not_serve():
     p = pad("GND", CENTRE)
     pin = pth("SIG", (10.0 + 0.25 + 0.6 + 0.85, 10.0))
 
-    plan = plan_padvia(snapshot([p, pin]), GND, [])
+    plan = PadviaPlanner()(snapshot([p, pin]), GND, [])
 
     assert len(plan.units) == 1
 
@@ -320,7 +323,7 @@ def test_same_net_pth_pad_beyond_served_distance_does_not_serve():
     p = pad("GND", CENTRE)
     pin = pth("GND", (10.0 + 0.25 + 1.1 + 0.85, 10.0))
 
-    plan = plan_padvia(snapshot([p, pin]), GND, [])
+    plan = PadviaPlanner()(snapshot([p, pin]), GND, [])
 
     assert len(plan.units) == 1
 
@@ -332,7 +335,7 @@ def test_free_spot_inside_mounting_hole_clearance_is_unfixable():
     hole = npth((13.5, 10.0), 3.0, override=MOUNTING_HOLE_OVERRIDE)
     pads = [pad("GND", CENTRE), blocker("B.Cu", EAST_CORRIDOR), hole]
 
-    plan = plan_padvia(snapshot(pads), GND, [])
+    plan = PadviaPlanner()(snapshot(pads), GND, [])
 
     assert plan.units == ()
     assert len(plan.unfixable) == 1
@@ -346,10 +349,10 @@ def test_via_keeps_edge_gap_from_a_board_cutout():
     pads = [pad("GND", CENTRE), blocker("B.Cu", EAST_CORRIDOR)]
     slot = box(10.8, 8.5, 14, 11.5)
     snap = snapshot(pads)
-    assert plan_padvia(snap, GND, []).units  # the corridor alone has room
+    assert PadviaPlanner()(snap, GND, []).units  # the corridor alone has room
 
     cut = replace(snap, edge_paths=[*snap.edge_paths, list(slot.exterior.coords)])
-    plan = plan_padvia(cut, GND, [])
+    plan = PadviaPlanner()(cut, GND, [])
 
     assert plan.units == ()
     assert [s.position for s in plan.unfixable] == [pytest.approx(CENTRE)]
@@ -359,7 +362,7 @@ def test_hole_without_clearance_override_leaves_the_spot_free():
     hole = npth((13.5, 10.0), 3.0)
     pads = [pad("GND", CENTRE), blocker("B.Cu", EAST_CORRIDOR), hole]
 
-    plan = plan_padvia(snapshot(pads), GND, [])
+    plan = PadviaPlanner()(snapshot(pads), GND, [])
 
     assert len(plan.units) == 1
     assert plan.units[0].position[0] > 10.3
@@ -370,8 +373,8 @@ def test_other_net_pad_clearance_override_is_honoured():
     padded = replace(near, clearance_override=1.0)
     pads = [pad("GND", CENTRE), blocker("B.Cu", EAST_CORRIDOR)]
 
-    plain = plan_padvia(snapshot([*pads, near]), GND, [])
-    overridden = plan_padvia(snapshot([*pads, padded]), GND, [])
+    plain = PadviaPlanner()(snapshot([*pads, near]), GND, [])
+    overridden = PadviaPlanner()(snapshot([*pads, padded]), GND, [])
 
     assert len(plain.units) == 1
     assert overridden.units == ()
@@ -381,7 +384,7 @@ def test_stub_crossing_other_net_track_on_pad_layer_is_rejected():
     crossing = track("SIG", (11.0, 8.5), (11.0, 11.5), layer="F.Cu")
     pads = [pad("GND", CENTRE), blocker("B.Cu", EAST_CORRIDOR)]
 
-    plan = plan_padvia(snapshot(pads, tracks=[crossing]), GND, [])
+    plan = PadviaPlanner()(snapshot(pads, tracks=[crossing]), GND, [])
 
     assert plan.units == ()
     assert len(plan.unfixable) == 1
@@ -391,7 +394,7 @@ def test_via_may_hop_over_other_net_track_on_another_layer():
     inner = track("SIG", (11.0, 8.5), (11.0, 11.5), layer="In1.Cu")
     pads = [pad("GND", CENTRE), blocker("B.Cu", EAST_CORRIDOR)]
 
-    plan = plan_padvia(snapshot(pads, tracks=[inner]), GND, [])
+    plan = PadviaPlanner()(snapshot(pads, tracks=[inner]), GND, [])
 
     assert len(plan.units) == 1
     x, _ = plan.units[0].position
@@ -401,7 +404,7 @@ def test_via_may_hop_over_other_net_track_on_another_layer():
 def test_via_clears_other_net_copper_on_every_layer():
     pads = [pad("GND", CENTRE), blocker("In2.Cu", EAST_CORRIDOR)]
 
-    plan = plan_padvia(snapshot(pads), GND, [])
+    plan = PadviaPlanner()(snapshot(pads), GND, [])
 
     assert len(plan.units) == 1
     assert plan.units[0].position[0] > 10.3
@@ -414,7 +417,7 @@ def test_net_with_zone_on_one_layer_only_is_skipped():
     zones = [zone("GND", ("F.Cu", "B.Cu")), zone("+5V", ("F.Cu",))]
     pads = [pad("+5V", CENTRE)]
 
-    plan = plan_padvia(snapshot(pads, zones=zones), PadviaOptions(("+5V",)), [])
+    plan = PadviaPlanner()(snapshot(pads, zones=zones), PadviaOptions(("+5V",)), [])
 
     assert plan.units == ()
     assert plan.unfixable == ()
@@ -430,7 +433,7 @@ def test_via_must_sit_inside_fill_on_required_layers_other_than_pad_layer():
     fills = {"F.Cu": BOARD, "In1.Cu": inner_fill, "B.Cu": BOARD}
     zones = [zone("GND", layers, fills=fills)]
 
-    plan = plan_padvia(snapshot([pad("GND", CENTRE)], zones=zones), GND, [])
+    plan = PadviaPlanner()(snapshot([pad("GND", CENTRE)], zones=zones), GND, [])
 
     assert plan.units == ()
     assert len(plan.unfixable) == 1
@@ -444,7 +447,7 @@ def test_via_outside_the_pad_layer_zone_outline_is_unfixable():
         zone("GND", ("B.Cu",)),
     ]
 
-    plan = plan_padvia(snapshot([pad("GND", CENTRE)], zones=zones), GND, [])
+    plan = PadviaPlanner()(snapshot([pad("GND", CENTRE)], zones=zones), GND, [])
 
     assert plan.units == ()
     assert len(plan.unfixable) == 1
@@ -455,7 +458,7 @@ def test_via_outside_the_pad_layer_zone_outline_is_unfixable():
 
 def test_via_avoids_a_via_keepout_rule_area():
     fp, pads = r0402()
-    nearest = plan_padvia(snapshot(pads, footprints=[fp]), GND, []).units[0]
+    nearest = PadviaPlanner()(snapshot(pads, footprints=[fp]), GND, []).units[0]
     keepout = Point(nearest.position).buffer(0.4)
     rule_area = Zone(
         net=None,
@@ -467,7 +470,7 @@ def test_via_avoids_a_via_keepout_rule_area():
     )
     zones = [zone("GND", ("F.Cu", "B.Cu")), rule_area]
 
-    plan = plan_padvia(snapshot(pads, zones=zones, footprints=[fp]), GND, [])
+    plan = PadviaPlanner()(snapshot(pads, zones=zones, footprints=[fp]), GND, [])
 
     (u,) = plan.units
     assert not Point(u.position).buffer(VIA.diameter / 2).intersects(keepout)
@@ -476,9 +479,9 @@ def test_via_avoids_a_via_keepout_rule_area():
 def test_forbidden_position_is_not_reused():
     fp, pads = r0402()
     snap = snapshot(pads, footprints=[fp])
-    first = plan_padvia(snap, GND, []).units[0].position
+    first = PadviaPlanner()(snap, GND, []).units[0].position
 
-    plan = plan_padvia(snap, GND, [first])
+    plan = PadviaPlanner()(snap, GND, [first])
 
     assert len(plan.units) == 1
     assert math.dist(plan.units[0].position, first) >= FORBIDDEN_RADIUS
@@ -492,10 +495,10 @@ def test_second_run_on_output_places_nothing():
         pad("+3V3", (19.52, 10.0), 0.56, 0.62, footprint_id="C1", pad_id="C1.2"),
     ]
     snap = snapshot([*pads, *more], footprints=[fp, other_fp])
-    first = plan_padvia(snap, GND, [])
+    first = PadviaPlanner()(snap, GND, [])
     assert len(first.units) == 2
 
-    second = plan_padvia(with_plan_applied(snap, first), GND, [])
+    second = PadviaPlanner()(with_plan_applied(snap, first), GND, [])
 
     assert second.units == ()
     assert second.unfixable == ()
@@ -506,7 +509,7 @@ def test_planned_vias_respect_each_other():
     sig_zone = zone("SIG2", ("F.Cu", "B.Cu"))
     snap = snapshot(pads, zones=[zone("GND", ("F.Cu", "B.Cu")), sig_zone])
 
-    plan = plan_padvia(snap, PadviaOptions(("GND", "SIG2")), [])
+    plan = PadviaPlanner()(snap, PadviaOptions(("GND", "SIG2")), [])
 
     assert len(plan.units) == 2
     a, b = (Point(u.position) for u in plan.units)
@@ -520,7 +523,7 @@ def test_a_later_via_keeps_hole_to_hole_from_an_earlier_planned_one():
     pads = [pad("GND", (10.0, 10.0)), pad("GND", (10.0, 10.55))]
     snap = snapshot(pads, zones=[zone("GND", ("In1.Cu", "B.Cu"))])
 
-    plan = plan_padvia(snap, GND, [])
+    plan = PadviaPlanner()(snap, GND, [])
 
     a, b = plan.units
     assert math.dist(a.position, b.position) - VIA.drill >= HOLE_TO_HOLE_GAP
@@ -530,10 +533,10 @@ def test_stub_through_a_mounting_hole_keep_off_is_rejected():
     # The corridor opens only beyond the hole, so every stub passes it.
     corridor = box(11.2, 9.0, 13.5, 11.0)
     pads = [pad("GND", CENTRE), blocker("B.Cu", corridor)]
-    (unit,) = plan_padvia(snapshot(pads), GND, []).units
+    (unit,) = PadviaPlanner()(snapshot(pads), GND, []).units
     snap = snapshot([*pads, npth((10.9, 10.0), 0.4)])
 
-    plan = plan_padvia(snap, GND, [])
+    plan = PadviaPlanner()(snap, GND, [])
 
     assert plan.units == ()
     assert len(plan.unfixable) == 1
@@ -548,7 +551,7 @@ def test_via_may_sit_within_the_via_in_pad_gap_of_its_own_pad():
     lane = LineString([CENTRE, (13, 13)]).buffer(0.8)
     pads = [pad("GND", CENTRE, 0.424, 0.424), blocker("B.Cu", lane, inner=0.0)]
 
-    plan = plan_padvia(snapshot(pads), GND, [])
+    plan = PadviaPlanner()(snapshot(pads), GND, [])
 
     assert plan.units[0].position == (10.53, 10.53)
 
@@ -559,7 +562,7 @@ ALL_NETS = PadviaOptions()
 
 
 def test_without_nets_a_pad_over_its_net_zone_on_another_layer_is_selected(log):
-    plan = plan_padvia(snapshot([pad("GND", (5, 5))]), ALL_NETS, [])
+    plan = PadviaPlanner()(snapshot([pad("GND", (5, 5))]), ALL_NETS, [])
 
     assert len(plan.units) == 1
     assert any(
@@ -575,14 +578,14 @@ def test_without_nets_a_zone_on_the_pad_layer_only_does_not_select_it():
         zone("+5V", ("B.Cu",), outline=box(20, 0, 30, 20)),
     ]
 
-    plan = plan_padvia(snapshot([pad("+5V", (5, 5))], zones=zones), ALL_NETS, [])
+    plan = PadviaPlanner()(snapshot([pad("+5V", (5, 5))], zones=zones), ALL_NETS, [])
 
     assert plan.units == ()
     assert plan.unfixable == ()
 
 
 def test_without_nets_a_pad_of_a_net_without_zones_is_not_selected(log):
-    plan = plan_padvia(snapshot([pad("SIG", (5, 5))]), ALL_NETS, [])
+    plan = PadviaPlanner()(snapshot([pad("SIG", (5, 5))]), ALL_NETS, [])
 
     assert plan.units == ()
     assert plan.unfixable == ()
@@ -597,8 +600,8 @@ def test_nets_restrict_the_derived_selection():
     pads = [pad("GND", (5, 5)), pad("GND", (15, 15)), pad("+3.3V", (15, 5))]
     snap = snapshot(pads, zones=zones)
 
-    assert len(plan_padvia(snap, ALL_NETS, []).units) == 2
-    plan = plan_padvia(snap, GND, [])
+    assert len(PadviaPlanner()(snap, ALL_NETS, []).units) == 2
+    plan = PadviaPlanner()(snap, GND, [])
     (unit,) = plan.units
     assert unit.net == "GND"
     assert Point(unit.position).distance(Point(5, 5)) < 2
@@ -613,7 +616,7 @@ def test_nets_skip_a_pad_without_its_net_zone_on_another_layer():
     ]
     snap = snapshot([pad("+5V", (5, 5))], zones=zones)
 
-    plan = plan_padvia(snap, PadviaOptions(("+5V",)), [])
+    plan = PadviaPlanner()(snap, PadviaOptions(("+5V",)), [])
 
     assert plan.units == ()
     assert plan.unfixable == ()
@@ -632,7 +635,7 @@ def test_without_nets_a_zone_outline_over_another_nets_fill_does_not_select_it()
         ),
     ]
 
-    plan = plan_padvia(snapshot([pad("+3.3V", (5, 5))], zones=zones), ALL_NETS, [])
+    plan = PadviaPlanner()(snapshot([pad("+3.3V", (5, 5))], zones=zones), ALL_NETS, [])
 
     assert plan.units == ()
     assert plan.unfixable == ()
@@ -647,7 +650,7 @@ def test_without_nets_fill_just_past_the_stub_length_still_selects_the_pad():
         zone("GND", ("F.Cu", "B.Cu"), fills={"F.Cu": BOARD, "B.Cu": back}),
     ]
 
-    plan = plan_padvia(snapshot([pad("GND", CENTRE)], zones=zones), ALL_NETS, [])
+    plan = PadviaPlanner()(snapshot([pad("GND", CENTRE)], zones=zones), ALL_NETS, [])
 
     assert len(plan.units) == 1
 
@@ -673,7 +676,7 @@ def sliver_zones():
 def test_fill_narrower_than_a_via_within_reach_does_not_select_the_pad():
     snap = snapshot([pad("+3.3V", CENTRE)], zones=sliver_zones())
 
-    plan = plan_padvia(snap, ALL_NETS, [])
+    plan = PadviaPlanner()(snap, ALL_NETS, [])
 
     assert plan.units == ()
     assert plan.unfixable == ()
@@ -683,7 +686,7 @@ def test_fill_wide_enough_for_the_via_override_selects_the_pad():
     small = ViaSize(0.4, 0.2)
     snap = snapshot([pad("+3.3V", CENTRE)], zones=sliver_zones())
 
-    plan = plan_padvia(snap, PadviaOptions(via=small), [])
+    plan = PadviaPlanner()(snap, PadviaOptions(via=small), [])
 
     (unit,) = plan.units
     assert SLIVER.contains(Point(unit.position).buffer(small.diameter / 2))
@@ -694,7 +697,7 @@ def test_four_layers_net_fill_only_on_the_far_outer_layer_selects_the_pad():
     # the +3.3V pour on B.Cu.
     zones = [zone("GND", ("In1.Cu",)), zone("+3.3V", ("F.Cu", "B.Cu"))]
 
-    plan = plan_padvia(snapshot([pad("+3.3V", (5, 5))], zones=zones), ALL_NETS, [])
+    plan = PadviaPlanner()(snapshot([pad("+3.3V", (5, 5))], zones=zones), ALL_NETS, [])
 
     assert len(plan.units) == 1
     assert plan.unfixable == ()
@@ -704,7 +707,7 @@ def test_unfixable_spot_spans_its_pad():
     big = pad("GND", CENTRE, 3.0, 2.0)
     pads = [big, blocker("B.Cu", box(0, 0, 0, 0), inner=0.0, outer=4.0)]
 
-    plan = plan_padvia(snapshot(pads), GND, [])
+    plan = PadviaPlanner()(snapshot(pads), GND, [])
 
     (spot,) = plan.unfixable
     assert spot.extent == pytest.approx(math.hypot(1.5, 1.0))
@@ -714,7 +717,7 @@ def test_without_nets_single_layer_pours_are_skipped_without_a_warning(log):
     zones = [zone("GND", ("F.Cu", "B.Cu")), zone("SW", ("F.Cu",))]
     pads = [pad("GND", (5, 5)), pad("SW", (15, 15), layer="B.Cu")]
 
-    plan_padvia(snapshot(pads, zones=zones), ALL_NETS, [])
+    PadviaPlanner()(snapshot(pads, zones=zones), ALL_NETS, [])
 
     assert not [m for m in log if "SW" in m and "skipping" in m]
 
@@ -803,7 +806,7 @@ BLOCKS_STRAIGHT_FIRST = pad("SIG", (10.9, 9.75), 0.1, 0.1)
 
 def plan_to_spot(*extra, centre=CENTRE):
     ring = blocker("B.Cu", Point(SPOT).buffer(0.65), centre=centre, inner=0.0)
-    return plan_padvia(snapshot([pad("GND", centre), ring, *extra]), GND, [])
+    return PadviaPlanner()(snapshot([pad("GND", centre), ring, *extra]), GND, [])
 
 
 def test_free_dogleg_leaves_the_pad_on_the_diagonal():
@@ -850,7 +853,7 @@ def test_search_moves_outward_past_a_spot_with_both_orders_blocked():
     assert padvia._via_ok(obstacles, spot, "GND", VIA, gnd)
     assert padvia._clear_dogleg(obstacles, CENTRE, spot, 0.4, "GND", "F.Cu") is None
 
-    (u,) = plan_padvia(snap, GND, []).units
+    (u,) = PadviaPlanner()(snap, GND, []).units
 
     assert Point(u.position).distance(Point(near)) > 0.3
 
@@ -865,7 +868,7 @@ def test_equally_far_spots_prefer_the_one_segment_45_degree_stub():
     )
     ring = blocker("B.Cu", holes, inner=0.0)
 
-    (u,) = plan_padvia(snapshot([pad("GND", CENTRE), ring]), GND, []).units
+    (u,) = PadviaPlanner()(snapshot([pad("GND", CENTRE), ring]), GND, []).units
 
     assert len(u.stub.path) == 2
     assert Point(u.position).distance(Point(ray_spot(45, 1.2))) < 0.1
@@ -894,7 +897,7 @@ def test_off_grid_pad_centre_on_a_diagonal_ray_gives_one_segment(degrees, centre
     spot = ray_spot(degrees, 1.2, centre)
     ring = blocker("B.Cu", Point(spot).buffer(0.65), centre=centre, inner=0.0)
 
-    (u,) = plan_padvia(snapshot([pad("GND", centre), ring]), GND, []).units
+    (u,) = PadviaPlanner()(snapshot([pad("GND", centre), ring]), GND, []).units
 
     assert len(u.stub.path) == 2
     assert_octilinear(u.stub.path)
@@ -934,10 +937,24 @@ def busy_board():
 
 
 def test_every_planned_stub_on_a_busy_board_runs_at_45_degree_multiples():
-    plan = plan_padvia(busy_board(), GND, [])
+    plan = PadviaPlanner()(busy_board(), GND, [])
 
     assert len(plan.units) >= 10
     assert sum(len(u.stub.path) == 3 for u in plan.units) >= 3
     for u in plan.units:
         assert u.stub.path[-1] == u.position
         assert_octilinear(u.stub.path)
+
+
+def test_planning_reports_each_candidate_pad_and_stops_between_pads(recorder):
+    snap = snapshot([pad("GND", (5, 5)), pad("GND", (15, 5))])
+    rec = recorder()
+
+    PadviaPlanner(rec.progress)(snap, GND, [])
+
+    assert rec.stages() == [(Stage.PLAN, (1, 2)), (Stage.PLAN, (2, 2))]
+
+    stopping = recorder(stop_at=Stage.PLAN)
+    with pytest.raises(Cancelled):
+        PadviaPlanner(stopping.progress)(snap, GND, [])
+    assert stopping.stages() == [(Stage.PLAN, (1, 2))]

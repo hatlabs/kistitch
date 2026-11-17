@@ -29,6 +29,7 @@ from kipy.wrapper import Wrapper
 from loguru import logger
 
 from kistitch.plan import PlannedUnit
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.snapshot import NM_PER_MM, Point2, kicad_busy
 
 MARKER_LAYER = BoardLayer.BL_Eco2_User
@@ -44,7 +45,20 @@ REFILLS_OFF_MESSAGE = (
     "Automatic zone refills are off: using the zone fills as they are; "
     "refill zones in KiCad (press B) before running kistitch"
 )
+# After an unknown push the refill is skipped: it would wait out its
+# deadline on a lost connection, and the commit usually landed anyway.
+UNKNOWN_PUSH_REFILL_MESSAGE = (
+    "Zones not refilled; once the commit shows in KiCad's undo history, "
+    "press B to refill zones"
+)
 COMMIT_PREFIX = "kistitch"
+
+
+class CommitOutcome(enum.Enum):
+    LANDED = "landed"
+    NOTHING = "nothing to commit"
+    # The push lost the connection to KiCad; the commit may have landed.
+    UNKNOWN = "unknown"
 
 
 class MarkerKind(enum.Enum):
@@ -164,6 +178,10 @@ class CreateItemsError(RuntimeError):
     pass
 
 
+class UnknownNetsError(ValueError):
+    """Units name nets the board no longer has."""
+
+
 def create_checked(board: kipy.board.Board, items: Sequence[Wrapper]) -> list[Wrapper]:
     """Create items and raise if KiCad refuses any of them.
 
@@ -195,16 +213,16 @@ def commit_units(
     markers: Sequence[Marker],
     stale: Sequence[kipy.board_types.BoardShape] = (),
     refill: bool = True,
-) -> int:
+    progress: Progress = NO_PROGRESS,
+) -> CommitOutcome:
     """Remove the stale markers and create the units plus the new Eco2 markers
-    as one commit, then refill the zones if `refill`.
-
-    Returns the number of placed vias and tracks.
+    as one commit, then refill the zones if `refill` and the commit is known
+    to have landed. Neither stops on request.
     """
     nets = {n.name: n for n in board.get_nets()}
     missing = sorted({u.net for u in units} - nets.keys())
     if missing:
-        raise ValueError(f"Nets not on the board: {', '.join(missing)}")
+        raise UnknownNetsError(f"Nets not on the board: {', '.join(missing)}")
     layer_ids = {
         L: board.get_layer_by_name(L) for L in {u.stub.layer for u in units if u.stub}
     }
@@ -215,7 +233,8 @@ def commit_units(
     try:
         if stale:
             board.remove_items(stale)
-        created = create_checked(board, placed) if placed else []
+        if placed:
+            create_checked(board, placed)
         if markers:
             create_checked(board, marker_items(markers))
     except BaseException:
@@ -223,18 +242,21 @@ def commit_units(
         raise
 
     # Outside the try above: once pushed, the commit can't be dropped.
-    if push_tolerant(board, commit, label):
-        logger.info(
-            f"Committed {len(units)} vias as '{label}'"
-            + (f" and {len(markers)} markers on User.Eco2" if markers else "")
-            + (f", replacing {len(stale)} earlier marker shapes" if stale else "")
-        )
-        if markers:
-            show_layers(board, [MARKER_LAYER])
-
+    if not push_tolerant(board, commit, label):
+        if refill:
+            logger.warning(UNKNOWN_PUSH_REFILL_MESSAGE)
+        return CommitOutcome.UNKNOWN
+    logger.info(
+        f"Committed {len(units)} vias as '{label}'"
+        + (f" and {len(markers)} markers on User.Eco2" if markers else "")
+        + (f", replacing {len(stale)} earlier marker shapes" if stale else "")
+    )
+    if markers:
+        show_layers(board, [MARKER_LAYER])
     if refill:
+        progress.report(Stage.REFILL, None)
         refill_after_commit(kicad, board)
-    return len(created)
+    return CommitOutcome.LANDED
 
 
 def show_layers(
@@ -284,8 +306,10 @@ def push_tolerant(board: kipy.board.Board, commit: Commit, label: str) -> bool:
     return True
 
 
-def refill_after_commit(kicad: kipy.KiCad, board: kipy.board.Board) -> None:
-    """Refill zones; a failure only warns, since the commit has landed."""
+def refill_after_commit(kicad: kipy.KiCad, board: kipy.board.Board) -> bool:
+    """Refill zones; True once KiCad answers after the refill request
+    (see `refill_tolerant`). A failure only warns, since the commit has
+    landed."""
     try:
         refilled = refill_tolerant(kicad, board)
     except (ApiError, KiCadConnectionError) as e:
@@ -293,10 +317,15 @@ def refill_after_commit(kicad: kipy.KiCad, board: kipy.board.Board) -> None:
         refilled = False
     if not refilled:
         logger.warning("Zone refill not confirmed; press B in KiCad to refill zones")
+    return refilled
 
 
 def _busy(e: Exception) -> bool:
     return isinstance(e, KiCadConnectionError) or kicad_busy(e)
+
+
+def _keep_waiting() -> None:
+    pass
 
 
 def refill_tolerant(
@@ -306,6 +335,7 @@ def refill_tolerant(
     poll_s: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    check: Callable[[], None] = _keep_waiting,
 ) -> bool:
     """Refill zones and wait, until `timeout_s` has passed, for KiCad to answer.
 
@@ -315,7 +345,8 @@ def refill_tolerant(
     timeout, so the deadline is wall-clock, not a poll count. A ping reply
     suggests, but doesn't prove, that the fill finished. AS_BUSY on the
     refill itself means KiCad refused to start it (a tool or dialog is
-    active), so it is retried.
+    active), so it is retried. `check` runs before every wait and may raise
+    to stop it.
     """
     if poll_s is None:
         poll_s = REFILL_POLL_S
@@ -340,10 +371,12 @@ def refill_tolerant(
             if clock() >= deadline:
                 logger.warning("KiCad stayed busy; zones were not refilled")
                 return False
+            check()
             sleep(poll_s)
 
     # Once KiCad has the refill, ask at least once whether it is done.
     while True:
+        check()
         sleep(poll_s)
         try:
             kicad.ping()

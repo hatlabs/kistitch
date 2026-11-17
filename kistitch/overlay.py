@@ -38,6 +38,7 @@ from kistitch.commit import (
     show_layers,
 )
 from kistitch.plan import POURSTITCH_PIXEL, raster_size
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.snapshot import NM_PER_MM, Point2, Snapshot
 
 DEFAULT_OVERLAY_LAYERS = ("User.1", "User.2", "User.3", "User.4")
@@ -48,6 +49,10 @@ OVERLAY_PPI = 254
 OVERLAY_TAG = ("kistitch", "pourstitch-overlay")
 # Overlays placed before the project was renamed from breakneck carry this.
 BREAKNECK_OVERLAY_TAG = ("breakneck", "pourstitch-overlay")
+LOST_PUSH_OVERLAY_MESSAGE = (
+    "Placement push not confirmed: overlays written, not placed; "
+    "the previous overlays are still on the board"
+)
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_CHUNK_HEADER = struct.Struct(">I4s")
 PNG_CRC_SIZE = 4
@@ -145,16 +150,26 @@ class OverlayLayersError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class PreparedLayers:
+    """Whether overlays can go on the board, and the layers enabled for them."""
+
+    place: bool
+    enabled: tuple[str, ...] = ()
+
+
 def prepare_overlay_layers(
     board: kipy.board.Board, outputs: Outputs, dry_run: bool
-) -> bool:
+) -> PreparedLayers:
     """Whether overlays can go on the board, enabling missing overlay layers
-    unless `dry_run`.
+    unless `dry_run`. Without `outputs.overlay` nothing is placed or checked.
 
     Too few overlay layers for the copper count, or a name that is not a
     non-copper layer, raises before any board change. If KiCad refuses to
     enable a layer, the error comes after the enabled set was changed.
     """
+    if not outputs.overlay:
+        return PreparedLayers(place=False)
     count = board.get_copper_layer_count()
     if count > len(outputs.overlay_layers):
         raise OverlayLayersError(
@@ -170,15 +185,15 @@ def prepare_overlay_layers(
         )
     missing = missing_layers(board, needed)
     if not missing:
-        return True
+        return PreparedLayers(place=True)
     if dry_run:
         logger.warning(
             f"Overlay layers not enabled on the board: {', '.join(missing)}. A run "
             "without --dry-run enables them; writing the PNGs only"
         )
-        return False
+        return PreparedLayers(place=False)
     enable_layers(board, missing)
-    return True
+    return PreparedLayers(place=True, enabled=tuple(missing))
 
 
 @dataclass(frozen=True)
@@ -332,11 +347,14 @@ def show_overlays(
     place: bool,
     commit_label: str,
     markers: Sequence[Marker] | None = None,
-) -> None:
+    progress: Progress = NO_PROGRESS,
+) -> bool:
     """Write the per-copper-layer PNGs and place them as this run's overlay
-    set, or log where they would go. `write_pngs` None means no images: the
-    previous set is only removed. `markers`, unless None, replace the marker
-    layer's shapes in the overlay commit, so they change only if it lands.
+    set, or log where they would go; True once the images are on the board.
+    `write_pngs` None means no images: the previous set is only removed.
+    `markers`, unless None, replace the marker layer's shapes in the overlay
+    commit, so they change only if it lands. The overlay commit is entered
+    as `progress`'s commit stage.
 
     The board embeds the image data, so the PNGs go to a temporary directory
     that is removed once they are placed. When they are not, they stay there
@@ -348,10 +366,11 @@ def show_overlays(
     placement = board_placement(bounds)
     if write_pngs is None:
         if place:
+            progress.enter(Stage.COMMIT)
             place_overlays(
                 board, [], placement, outputs.overlay_layers, commit_label, markers
             )
-        return
+        return False
     out_dir = Path(tempfile.mkdtemp(prefix=PNG_DIR_PREFIX))
     try:
         pngs = write_pngs(out_dir)
@@ -366,6 +385,8 @@ def show_overlays(
             )
             for L, path in pngs.items()
         ]
+        if place:
+            progress.enter(Stage.COMMIT)
         placed = place and place_overlays(
             board, images, placement, outputs.overlay_layers, commit_label, markers
         )
@@ -377,3 +398,4 @@ def show_overlays(
     elif not place:
         for i in images:
             logger.info(f"Overlay not placed: {i.describe()}")
+    return placed

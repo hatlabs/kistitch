@@ -3,16 +3,32 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import kipy
 import kipy.board
 from loguru import logger
 
 from kistitch import overlay, render
-from kistitch.placement import RunSettings, check_outline, measure_only, run_placement
+from kistitch.commit import CommitOutcome
+from kistitch.placement import (
+    RunResult,
+    RunSettings,
+    check_outline,
+    measure_only,
+    run_placement,
+)
 from kistitch.plan import Plan
-from kistitch.pourstitch import Options, PourStitcher, summarise
-from kistitch.raster import CoverageMap, Grid
+from kistitch.pourstitch import (
+    LayerCoverage,
+    NetCoverage,
+    Options,
+    PourStitcher,
+    by_net,
+    summarise,
+)
+from kistitch.progress import NO_PROGRESS, Progress, Stage
+from kistitch.raster import CoverageMap
 from kistitch.snapshot import Snapshot
 
 COMMAND = "pourstitch"
@@ -34,15 +50,30 @@ STYLE = render.HeatmapStyle(
 )
 
 
+@dataclass(frozen=True, kw_only=True)
+class StitchResult:
+    """The coverage after the run at `distance`, with the placement unless
+    the run only measured.
+
+    After a placement the coverage is of the planned board: it holds once
+    the placement landed (`placement.commit`).
+    """
+
+    distance: float
+    coverage: tuple[NetCoverage, ...]
+    placement: RunResult | None
+    layers_enabled: tuple[str, ...]
+    overlays_placed: bool
+
+
 def _log_coverage(
     stitcher: PourStitcher,
     snapshot: Snapshot,
     options: Options,
-    maps: Sequence[CoverageMap],
-    grid: Grid,
+    coverage: Sequence[LayerCoverage],
 ) -> None:
     counts = stitcher.stitch_counts(snapshot, options)
-    for c in summarise(maps, options.max_distance, grid.pixel):
+    for c in coverage:
         unstitchable = (
             f"; {c.unstitchable_mm2:.2f} mm² can't be stitched (no two-layer spot within reach)"
             if c.unstitchable_mm2
@@ -86,24 +117,25 @@ def execute(
     allow_splits: bool = True,
     refill: bool = True,
     kicad: kipy.KiCad | None = None,
-) -> None:
+    progress: Progress = NO_PROGRESS,
+) -> StitchResult:
     """Run pourstitch against the open board.
 
     `check` only measures the existing stitching: no planning, no kicad-cli,
     no vias. With overlays, it removes the markers in the overlay commit,
     since the heatmap shows what they marked. Overlays are placed in their
-    own commit, also in a dry run.
+    own commit, also in a dry run. A run stops on request up to its
+    overlay commit, or up to its via commit once it attempts one.
     """
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
     check_outline(board)
-    place_overlay = outputs.overlay and overlay.prepare_overlay_layers(
-        board, outputs, dry_run
-    )
+    layers = overlay.prepare_overlay_layers(board, outputs, dry_run)
 
-    stitcher = PourStitcher()
+    stitcher = PourStitcher(progress)
+    result: RunResult | None = None
     if check:
-        snapshot, plan = measure_only(kicad, board, refill)
+        snapshot, plan = measure_only(kicad, board, refill, progress)
     else:
         result = run_placement(
             stitcher,
@@ -117,14 +149,23 @@ def execute(
                 refill=refill,
             ),
             kicad,
+            progress=progress,
         )
         snapshot, plan = result.snapshot, result.prune.plan
 
+    # A placement that attempted its commit is past its last stop point;
+    # one that committed nothing still stops before measuring.
+    committed = result is not None and result.commit is not CommitOutcome.NOTHING
+    after = progress.without_stop() if committed else progress
+    after.enter(Stage.MEASURE)
     grid = stitcher.grid(snapshot, options)
     maps = stitcher.coverage(snapshot, options, plan.units)
+    coverage = summarise(maps, options.max_distance, grid.pixel)
     logger.info(f"{COMMAND} coverage" + (" (check only)" if check else ""))
-    _log_coverage(stitcher, snapshot, options, maps, grid)
+    _log_coverage(stitcher, snapshot, options, coverage)
 
+    if outputs.render is not None or outputs.overlay:
+        after.enter(Stage.DRAW)
     if outputs.render is not None:
         if maps:
             render.render_panels(
@@ -146,9 +187,17 @@ def execute(
             )
         logger.info(f"Wrote {outputs.render}")
 
+    # After a lost placement push the overlay commit would go over the same
+    # connection; the PNGs are written for placing by hand instead.
+    place = layers.place and (
+        result is None or result.commit is not CommitOutcome.UNKNOWN
+    )
+    if layers.place and not place:
+        logger.warning(overlay.LOST_PUSH_OVERLAY_MESSAGE)
+    overlays_placed = False
     if outputs.overlay:
         # On the board, existing and planned vias show as themselves.
-        overlay.show_overlays(
+        overlays_placed = overlay.show_overlays(
             board,
             (
                 lambda out_dir: render.write_overlays(
@@ -159,7 +208,15 @@ def execute(
             else None,
             snapshot,
             outputs,
-            place_overlay,
+            place,
             OVERLAY_COMMIT,
             () if check else None,
+            after,
         )
+    return StitchResult(
+        distance=options.max_distance,
+        coverage=by_net(coverage),
+        placement=result,
+        layers_enabled=layers.enabled,
+        overlays_placed=overlays_placed,
+    )

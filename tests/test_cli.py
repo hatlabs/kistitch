@@ -2,6 +2,7 @@ import argparse
 import re
 import subprocess
 import sys
+from importlib import metadata
 
 import kipy
 import pytest
@@ -156,7 +157,7 @@ def capture_run_settings(monkeypatch, module) -> list[placement.RunSettings]:
     """Record the settings `module` runs placement with, stopping the run there."""
     seen: list[placement.RunSettings] = []
 
-    def capture(planner, options, settings, kicad):
+    def capture(planner, options, settings, kicad, *, progress):
         seen.append(settings)
         raise Captured
 
@@ -486,7 +487,7 @@ def test_refill_reaches_the_heatmap_command_run_settings(
 ):
     seen: list[placement.RunSettings] = []
 
-    def capture(planner, options, settings, kicad):
+    def capture(planner, options, settings, kicad, *, progress):
         seen.append(settings)
         raise Captured
 
@@ -504,7 +505,7 @@ def test_refill_reaches_the_heatmap_command_run_settings(
 def test_refill_reaches_the_check_measurement(monkeypatch, argv, module, flags, refill):
     seen: list[bool] = []
 
-    def capture(kicad, board, refill=True):
+    def capture(kicad, board, refill, progress):
         seen.append(refill)
         raise Captured
 
@@ -517,3 +518,36 @@ def test_refill_reaches_the_check_measurement(monkeypatch, argv, module, flags, 
         )
 
     assert seen == [refill]
+
+
+def run_panel_without(module: str) -> subprocess.CompletedProcess[str]:
+    """Run `kistitch-panel` with `module` failing to import."""
+    code = (
+        "import sys\n"
+        f"sys.modules[{module!r}] = None\n"
+        "from kistitch.cli import panel_main\n"
+        "panel_main([])\n"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+
+
+def test_panel_without_the_gui_extra_prints_the_install_hint():
+    ran = run_panel_without("PySide6")
+
+    assert ran.returncode != 0
+    assert "uv tool install 'kistitch[gui]'" in ran.stderr
+
+
+def test_panel_reports_another_import_error_as_it_is():
+    ran = run_panel_without("kistitch.panel.window")
+
+    assert ran.returncode != 0
+    assert "uv tool install" not in ran.stderr
+    assert "ModuleNotFoundError" in ran.stderr
+
+
+def test_panel_is_installed_as_kistitch_panel():
+    (script,) = metadata.entry_points(group="console_scripts", name="kistitch-panel")
+    assert script.value == "kistitch.cli:panel_main"

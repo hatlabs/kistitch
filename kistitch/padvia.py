@@ -28,6 +28,7 @@ from shapely.geometry.base import BaseGeometry
 
 from kistitch.obstacles import Obstacles
 from kistitch.plan import Plan, PlannedUnit, Stub, UnfixableSpot
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.snapshot import Pad, PadKind, Point2, Snapshot, ViaSize
 
 OWN_PAD_GAP = 0.15
@@ -307,40 +308,52 @@ def _outward(snapshot: Snapshot, pad: Pad) -> tuple[float, float] | None:
     return (ox / length, oy / length)
 
 
-def plan_padvia(
-    snapshot: Snapshot, options: PadviaOptions, forbidden: Sequence[Point2]
-) -> Plan:
-    obstacles = Obstacles(snapshot, forbidden)
-    units: list[PlannedUnit] = []
-    unfixable: list[UnfixableSpot] = []
-    candidates = _candidates(snapshot, options)
-    for pad in candidates:
-        layer = _own_layer(pad)
-        if _is_served(obstacles, pad, layer):
-            continue
-        size = _via_size(snapshot, options, pad.net)
-        unit = _plan_pad(obstacles, pad, size, _outward(snapshot, pad))
-        if unit is None:
-            shape = pad.shapes[layer]
-            c = shape.centroid
-            unfixable.append(
-                UnfixableSpot(
-                    position=_rounded((c.x, c.y)),
-                    net=pad.net,
-                    reason=f"pad {_pad_label(snapshot, pad)}: no via spot "
-                    f"within {MAX_STUB} mm",
-                    layer=layer,
-                    extent=_extent(shape, c),
+class PadviaPlanner:
+    """Planner for `run_placement`.
+
+    Each candidate pad is a stop point of `progress`."""
+
+    def __init__(self, progress: Progress = NO_PROGRESS) -> None:
+        self._progress = progress
+
+    def __call__(
+        self,
+        snapshot: Snapshot,
+        options: PadviaOptions,
+        forbidden: Sequence[Point2],
+    ) -> Plan:
+        obstacles = Obstacles(snapshot, forbidden)
+        units: list[PlannedUnit] = []
+        unfixable: list[UnfixableSpot] = []
+        candidates = _candidates(snapshot, options)
+        for i, pad in enumerate(candidates):
+            self._progress.enter(Stage.PLAN, (i + 1, len(candidates)))
+            layer = _own_layer(pad)
+            if _is_served(obstacles, pad, layer):
+                continue
+            size = _via_size(snapshot, options, pad.net)
+            unit = _plan_pad(obstacles, pad, size, _outward(snapshot, pad))
+            if unit is None:
+                shape = pad.shapes[layer]
+                c = shape.centroid
+                unfixable.append(
+                    UnfixableSpot(
+                        position=_rounded((c.x, c.y)),
+                        net=pad.net,
+                        reason=f"pad {_pad_label(snapshot, pad)}: no via spot "
+                        f"within {MAX_STUB} mm",
+                        layer=layer,
+                        extent=_extent(shape, c),
+                    )
                 )
-            )
-            continue
-        units.append(unit)
-        obstacles.add_unit(unit)
-    logger.info(
-        f"padvia: {len(candidates)} candidate pads, {len(units)} need a via, "
-        f"{len(unfixable)} unfixable"
-    )
-    return Plan(units=tuple(units), unfixable=tuple(unfixable))
+                continue
+            units.append(unit)
+            obstacles.add_unit(unit)
+        logger.info(
+            f"padvia: {len(candidates)} candidate pads, {len(units)} need a via, "
+            f"{len(unfixable)} unfixable"
+        )
+        return Plan(units=tuple(units), unfixable=tuple(unfixable))
 
 
 def _extent(shape: BaseGeometry, centre: Point) -> float:

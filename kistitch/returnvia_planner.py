@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from kistitch.obstacles import Obstacles
 from kistitch.plan import OTHER_NET_CLEARANCE, Plan, PlannedUnit, UnfixableSpot
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.returnpath import Outcome, ReturnFields, served_within
 from kistitch.returnvia import (
     DISTANCE_EPSILON,
@@ -112,12 +113,15 @@ class _Context:
     unfixable: tuple[UnfixableSpot, ...]
 
     @classmethod
-    def measure(cls, snapshot: Snapshot, options: ReturnViaOptions) -> _Context:
+    def measure(
+        cls, snapshot: Snapshot, options: ReturnViaOptions, progress: Progress
+    ) -> _Context:
         grounds = resolve_ground_nets(snapshot, options.ground_nets)
         fields = ReturnFields(snapshot)
         targets: list[Target] = []
         unfixable: list[UnfixableSpot] = []
         for refs in via_references(snapshot, grounds):
+            progress.check()
             failing = [
                 r for r in fields.measure([refs], options.distance) if not r.served
             ]
@@ -150,8 +154,11 @@ class _Context:
 class _Round:
     """One planning pass over the targets, with the round's forbidden spots."""
 
-    def __init__(self, ctx: _Context, forbidden: Sequence[Point2]) -> None:
+    def __init__(
+        self, ctx: _Context, forbidden: Sequence[Point2], progress: Progress
+    ) -> None:
         self.ctx = ctx
+        self.progress = progress
         self.distance = ctx.options.distance
         self.obstacles = Obstacles(ctx.snapshot, forbidden)
         self.units: list[PlannedUnit] = []
@@ -160,7 +167,9 @@ class _Round:
         options = self.ctx.options
         unfixable = list(self.ctx.unfixable)
         pending: list[tuple[Target, ViaSize, str]] = []
-        for t in self.ctx.targets:
+        targets = self.ctx.targets
+        for i, t in enumerate(targets):
+            self.progress.enter(Stage.PLAN, (i + 1, len(targets)))
             planes = self.unserved(t)
             if not planes:
                 continue
@@ -275,11 +284,13 @@ class ReturnViaPlanner:
 
     A first pass places full-clearance vias. With `force`, a second pass
     gives each via still unserved the spot with the most clearance, unless
-    that spot would overlap other-net copper.
+    that spot would overlap other-net copper. Each via measured and each
+    target planned is a stop point of `progress`.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, progress: Progress = NO_PROGRESS) -> None:
         self._ctx: _Context | None = None
+        self._progress = progress
 
     def __call__(
         self,
@@ -289,8 +300,8 @@ class ReturnViaPlanner:
     ) -> Plan:
         ctx = self._cached(snapshot, options)
         if ctx is None:
-            ctx = self._ctx = _Context.measure(snapshot, options)
-        return _Round(ctx, forbidden).plan()
+            ctx = self._ctx = _Context.measure(snapshot, options, self._progress)
+        return _Round(ctx, forbidden, self._progress).plan()
 
     def grounds(self, snapshot: Snapshot, options: ReturnViaOptions) -> list[str]:
         """The ground nets, resolved again only if this snapshot was never planned."""

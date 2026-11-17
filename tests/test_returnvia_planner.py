@@ -1,10 +1,12 @@
 import math
 
+import pytest
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
 from kistitch import drc
 from kistitch.placement import markers_for
+from kistitch.progress import Cancelled, Progress, Stage
 from kistitch.returnpath import Outcome, measure_returns
 from kistitch.returnvia import ReturnViaOptions
 from kistitch.returnvia_command import with_returns
@@ -431,3 +433,33 @@ def test_return_reach_follows_its_own_ground_nets_via_size():
     (u,) = result.units
     assert (u.net, u.position, u.size) == ("GND_ISO", centre, sizes["GND_ISO"])
     assert not unserved(check(snap, result, TWO_GROUNDS))
+
+
+def test_planning_reports_each_target_and_stops_between_targets(recorder):
+    snap = board([SIG, (SIG[0] + 0.8, SIG[1] + 0.9)])
+    rec = recorder()
+
+    ReturnViaPlanner(rec.progress)(snap, ReturnViaOptions(), [])
+
+    assert rec.stages() == [(Stage.PLAN, (1, 2)), (Stage.PLAN, (2, 2))]
+
+    stopping = recorder(stop_at=Stage.PLAN)
+    with pytest.raises(Cancelled):
+        ReturnViaPlanner(stopping.progress)(snap, ReturnViaOptions(), [])
+    assert stopping.stages() == [(Stage.PLAN, (1, 2))]
+
+
+def test_measuring_the_targets_stops_on_request():
+    # The stop comes after the first via is measured, so only a check
+    # inside the measurement can catch it before planning starts.
+    checks = []
+    stages = []
+    progress = Progress(
+        report=lambda stage, count: stages.append(stage),
+        stop=lambda: checks.append(None) or len(checks) > 1,
+    )
+    snap = board([SIG, (SIG[0] + 0.8, SIG[1] + 0.9)])
+
+    with pytest.raises(Cancelled):
+        ReturnViaPlanner(progress)(snap, ReturnViaOptions(), [])
+    assert Stage.PLAN not in stages

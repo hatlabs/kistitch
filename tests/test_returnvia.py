@@ -548,7 +548,9 @@ def test_returnvia_without_a_ground_exits_with_an_error(monkeypatch):
     monkeypatch.setattr(
         returnvia_command,
         "run_placement",
-        lambda planner, options, settings, kicad: planner(snap, options, []),
+        lambda planner, options, settings, kicad, *, progress: planner(
+            snap, options, []
+        ),
     )
     monkeypatch.setattr(returnvia_command, "check_outline", lambda board: None)
     monkeypatch.setattr(

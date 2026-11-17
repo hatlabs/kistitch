@@ -17,12 +17,16 @@ from kistitch.plan import (
 )
 from kistitch.pourstitch import (
     QUANTISATION,
+    LayerCoverage,
+    NetCoverage,
     Options,
     OtherClassNetsError,
     PourStitcher,
+    by_net,
     lattice_sites,
     summarise,
 )
+from kistitch.progress import Cancelled, Stage
 from kistitch.returnvia import NoGroundNetsError
 from kistitch.snapshot import Pad, PadKind, Snapshot, Via, ViaSize, Zone
 
@@ -632,3 +636,30 @@ def test_power_run_on_a_ground_only_board_stitches_nothing(log):
 
     assert plan.units == ()
     assert any("power nets" in m and m.rstrip().endswith(": none") for m in log)
+
+
+def test_by_net_adds_up_each_nets_layers_in_net_order():
+    layers = [
+        LayerCoverage("GND", "F.Cu", 4, 1.0, 0.5),
+        LayerCoverage("+5V", "F.Cu", 0, 0.0, 0.0),
+        LayerCoverage("GND", "B.Cu", 8, 2.0, 0.25),
+    ]
+
+    assert by_net(layers) == (
+        NetCoverage("GND", 3.0, 0.75),
+        NetCoverage("+5V", 0.0, 0.0),
+    )
+
+
+def test_planning_reports_each_net_and_stops_between_nets(recorder):
+    snap = pours_snapshot({"+3.3V": box(0, 0, 10, 10), "+5V": box(20, 0, 30, 10)})
+    rec = recorder()
+
+    PourStitcher(rec.progress)(snap, power(), [])
+
+    assert rec.stages() == [(Stage.PLAN, (1, 2)), (Stage.PLAN, (2, 2))]
+
+    stopping = recorder(stop_at=Stage.PLAN)
+    with pytest.raises(Cancelled):
+        PourStitcher(stopping.progress)(snap, power(), [])
+    assert stopping.stages() == [(Stage.PLAN, (1, 2))]

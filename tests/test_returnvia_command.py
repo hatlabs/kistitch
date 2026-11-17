@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import io
 from itertools import pairwise
 from pathlib import Path
@@ -16,14 +17,17 @@ from shapely.ops import unary_union
 from kistitch import cli, drc, overlay, pourstitch_command, render, returnvia_command
 from kistitch.commit import (
     MARKER_LAYER,
+    CommitOutcome,
+    CreateItemsError,
     Marker,
     MarkerKind,
     eco2_segment,
     marker_items,
 )
 from kistitch.placement import RunResult
-from kistitch.plan import QUANTISATION, Plan, PlannedUnit
+from kistitch.plan import QUANTISATION, Plan, PlannedUnit, UnfixableSpot
 from kistitch.pourstitch import Options
+from kistitch.progress import Cancelled, Stage
 from kistitch.raster import CoverageMap, Grid
 from kistitch.returnpath import (
     NoBoardOutlineError,
@@ -192,10 +196,14 @@ class Fakes:
 def fakes(monkeypatch):
     f = Fakes()
 
-    def fake_run(planner, options, settings, kicad):
+    def fake_run(planner, options, settings, kicad, *, progress):
         f.planned.append(settings)
         plan = f.plan or planner(f.snap, options, [])
-        return RunResult(f.snap, drc.PruneResult(plan, (), (), (), 1))
+        return RunResult(
+            f.snap,
+            drc.PruneResult(plan, (), (), (), 1),
+            commit=CommitOutcome.NOTHING if settings.dry_run else CommitOutcome.LANDED,
+        )
 
     monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda board: f.snap))
     monkeypatch.setattr(
@@ -215,7 +223,7 @@ def info_log():
 
 
 def run(board, check=True, dry_run=False, full_map=False, **outputs):
-    returnvia_command.execute(
+    return returnvia_command.execute(
         OPTIONS,
         overlay.Outputs(**outputs),
         check=check,
@@ -392,8 +400,9 @@ def test_no_unserved_via_gets_no_heatmap(fakes, tmp_path: Path):
     fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
     board = Board()
 
-    run(board, overlay=True)
+    result = run(board, overlay=True)
 
+    assert not result.overlays_placed
     assert fakes.created == []
     assert board.calls == ["refill_zones"]
 
@@ -786,6 +795,89 @@ def test_check_logs_each_unserved_via_plane_and_commits_nothing(fakes, log):
     assert any("1 of 1 vias unserved" in m and "1 of 2 via-plane" in m for m in log)
 
 
+def test_check_returns_the_unserved_and_total_vias_it_logs(fakes, log):
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+
+    result = run(Board(), overlay=True)
+
+    assert any("1 of 1 vias unserved within" in m for m in log)
+    assert (result.unserved, result.total) == (1, 1)
+    assert result.distance == DISTANCE
+    assert result.placement is None
+    assert (result.unfixable, result.forced) == (0, 0)
+    assert result.full_map is False
+    assert result.layers_enabled == ()
+
+
+def test_check_returns_the_view_and_the_layers_it_enabled(fakes):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+
+    result = run(Board(enabled=USER[:2]), overlay=True, full_map=True)
+
+    assert result.full_map is True
+    assert result.layers_enabled == ("User.3", "User.4")
+    assert result.overlays_placed
+    assert (result.unserved, result.total) == (0, 1)
+
+
+def test_overlay_images_kicad_refuses_are_reported_not_placed(
+    fakes, monkeypatch, png_dir
+):
+    def refuse(board, items):
+        raise CreateItemsError("no overlapping layers")
+
+    monkeypatch.setattr(overlay, "create_checked", refuse)
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+
+    result = run(Board(), overlay=True)
+
+    assert not result.overlays_placed
+    assert list(png_dir.glob("*.png"))
+
+
+def test_overlays_after_a_lost_placement_push_are_written_not_placed(
+    fakes, monkeypatch, png_dir, log
+):
+    landed = returnvia_command.run_placement
+    monkeypatch.setattr(
+        returnvia_command,
+        "run_placement",
+        lambda *args, progress: dataclasses.replace(
+            landed(*args, progress=progress), commit=CommitOutcome.UNKNOWN
+        ),
+    )
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+    board = Board()
+
+    result = run(board, check=False, full_map=True, overlay=True)
+
+    assert not result.overlays_placed
+    assert "begin_commit" not in board.calls
+    assert fakes.created == []
+    assert list(png_dir.glob("*.png"))
+    assert sum(overlay.LOST_PUSH_OVERLAY_MESSAGE in m for m in log) == 1
+
+
+def test_place_returns_the_placement_and_its_unfixable_and_forced_vias(fakes):
+    fakes.snap = snapshot()
+    spot = UnfixableSpot(SIG, "SIG", "no room")
+    fakes.plan = Plan(
+        units=(
+            PlannedUnit((6.0, 5.0), "GND", VIA, forced=True),
+            PlannedUnit((15.0, 15.0), "GND", VIA),
+        ),
+        # One via unfixable on two of its planes counts once.
+        unfixable=(spot, UnfixableSpot(SIG, "SIG", "no room", "In2.Cu")),
+    )
+
+    result = run(Board(), check=False)
+
+    assert result.placement is not None
+    assert result.placement.placed == 2
+    assert (result.unfixable, result.forced) == (1, 1)
+    assert (result.unserved, result.total) == (1, 1)
+
+
 def test_unserved_lines_are_debug_and_the_summary_info(fakes, log, info_log):
     fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
     fakes.snap.vias = [*fakes.snap.vias, via("SIG", (15.0, 5.0))]
@@ -958,8 +1050,11 @@ def test_dry_run_overlay_shows_the_planned_vias(fakes, log):
     fakes.snap = snapshot()
     board = Board()
 
-    run(board, overlay=True, check=False, dry_run=True, full_map=True)
+    result = run(board, overlay=True, check=False, dry_run=True, full_map=True)
 
+    assert result.placement is not None
+    assert result.placement.commit is CommitOutcome.NOTHING
+    assert result.overlays_placed
     assert [s.dry_run for s in fakes.planned] == [True]
     assert board.calls == [
         "begin_commit",
@@ -1311,3 +1406,150 @@ def test_unserved_markers_put_one_circle_at_each_via_with_an_unserved_end():
         Marker(both_unserved, MarkerKind.UNFIXABLE, extent=0.4),
         Marker(one_unserved, MarkerKind.UNFIXABLE, extent=0.3),
     )
+
+
+# ---- progress and cancellation ------------------------------------------------
+
+
+def test_heatmap_reports_its_stages_in_order(fakes, png_dir, recorder):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+    rec = recorder()
+
+    returnvia_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        full_map=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert [s for s, _ in rec.stages()] == [
+        Stage.REFILL,
+        Stage.READ,
+        Stage.MEASURE,
+        Stage.DRAW,
+        Stage.COMMIT,
+    ]
+
+
+def test_heatmap_without_outputs_reports_no_draw_stage(fakes, recorder):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+    rec = recorder()
+
+    returnvia_command.execute(
+        OPTIONS,
+        overlay.Outputs(),
+        check=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert [s for s, _ in rec.stages()] == [Stage.REFILL, Stage.READ, Stage.MEASURE]
+
+
+def test_heatmap_stopped_before_the_overlay_commit_places_nothing(
+    fakes, png_dir, recorder
+):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+    board = Board()
+    rec = recorder(stop_at=Stage.DRAW)
+
+    with pytest.raises(Cancelled):
+        returnvia_command.execute(
+            OPTIONS,
+            overlay.Outputs(overlay=True),
+            check=True,
+            full_map=True,
+            kicad=KiCad(board),  # type: ignore[arg-type]
+            progress=rec.progress,
+        )
+
+    assert board.calls == ["refill_zones"]
+    assert fakes.created == []
+    assert not png_dir.exists()
+
+
+def test_heatmap_stopped_once_committing_still_places_the_overlays(
+    fakes, png_dir, recorder
+):
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+    board = Board()
+    rec = recorder(stop_at=Stage.COMMIT)
+
+    result = returnvia_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        full_map=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert result.placement is None
+    assert fakes.created
+    assert ("push_commit", returnvia_command.OVERLAY_COMMIT) in board.calls
+
+
+def stopping_run(rec, snap, outcome):
+    """A placement asked to stop while it ran, ending with `outcome`."""
+
+    def run(planner, options, settings, kicad, *, progress):
+        assert progress is rec.progress
+        rec.stopped = True
+        return RunResult(snap, drc.PruneResult(Plan(), (), (), (), 1), commit=outcome)
+
+    return run
+
+
+@pytest.mark.parametrize(
+    ("outcome", "overlaid"),
+    [(CommitOutcome.LANDED, True), (CommitOutcome.UNKNOWN, False)],
+)
+def test_place_stopped_after_its_commit_still_measures_and_overlays(
+    fakes, png_dir, recorder, monkeypatch, outcome, overlaid
+):
+    rec = recorder()
+    monkeypatch.setattr(
+        returnvia_command,
+        "run_placement",
+        stopping_run(rec, fakes.snap, outcome),
+    )
+
+    result = returnvia_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        full_map=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+        progress=rec.progress,
+    )
+
+    assert result.placement is not None
+    assert bool(fakes.created) == overlaid
+    # A lost push skips the overlay commit, so no commit stage follows.
+    assert [s for s, _ in rec.stages()] == [Stage.MEASURE, Stage.DRAW] + (
+        [Stage.COMMIT] if overlaid else []
+    )
+
+
+def test_place_that_committed_nothing_stops_before_measuring(
+    fakes, png_dir, recorder, monkeypatch
+):
+    rec = recorder()
+    monkeypatch.setattr(
+        returnvia_command,
+        "run_placement",
+        stopping_run(rec, fakes.snap, CommitOutcome.NOTHING),
+    )
+
+    with pytest.raises(Cancelled):
+        returnvia_command.execute(
+            OPTIONS,
+            overlay.Outputs(overlay=True),
+            full_map=True,
+            kicad=KiCad(Board()),  # type: ignore[arg-type]
+            progress=rec.progress,
+        )
+
+    assert rec.stages() == []
+    assert fakes.created == []

@@ -15,14 +15,16 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from kistitch import overlay, render
-from kistitch.commit import Marker, MarkerKind
+from kistitch.commit import CommitOutcome, Marker, MarkerKind
 from kistitch.placement import (
+    RunResult,
     RunSettings,
     check_outline,
     measure_only,
     run_placement,
 )
 from kistitch.plan import QUANTISATION, PlannedUnit
+from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.raster import BoolMap, CoverageMap, Grid
 from kistitch.returnpath import (
     Outcome,
@@ -325,11 +327,33 @@ def ring_maps(
     return out
 
 
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class ReturnResult:
+    """Vias unserved within `distance` of all measured, after the run, with
+    the placement and its unfixable and forced vias unless the run only
+    measured. `full_map` is the heatmap view shown.
+
+    After a placement the figures are of the planned board: they hold once
+    the placement landed (`placement.commit`).
+    """
+
+    distance: float
+    unserved: int
+    total: int
+    placement: RunResult | None
+    unfixable: int
+    forced: int
+    full_map: bool
+    layers_enabled: tuple[str, ...]
+    overlays_placed: bool
+
+
 def log_results(
     references: Sequence[ViaReferences],
     results: Sequence[PlaneReturn],
     distance: float,
-) -> None:
+) -> tuple[int, int]:
+    """Log the measurement; returns the vias unserved and the vias measured."""
     exempt = sum(r.exempt for r in references)
     logger.info(f"  {exempt} vias exempt: connected to copper on fewer than two layers")
     unserved = [r for r in results if not r.served]
@@ -350,6 +374,7 @@ def log_results(
         f"{COMMAND}: {len(failing)} of {len(vias)} vias unserved within "
         f"{distance:g} mm; {len(unserved)} of {len(results)} via-plane returns"
     )
+    return len(failing), len(vias)
 
 
 def execute(
@@ -363,7 +388,8 @@ def execute(
     full_map: bool = False,
     refill: bool = True,
     kicad: kipy.KiCad | None = None,
-) -> None:
+    progress: Progress = NO_PROGRESS,
+) -> ReturnResult:
     """Run returnvia against the open board.
 
     `check` only measures the existing returns: no planning, no kicad-cli,
@@ -371,18 +397,18 @@ def execute(
     unserved via in the overlay commit. Planned vias count as returns in
     the measurement, except forced ones. The heatmaps show only the copper
     around unserved via ends, or with `full_map` all copper. Overlays are
-    placed in their own commit, also in a dry run.
+    placed in their own commit, also in a dry run. A run stops on request
+    up to its overlay commit, or up to its via commit once it attempts one.
     """
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
     check_outline(board)
-    place_overlay = outputs.overlay and overlay.prepare_overlay_layers(
-        board, outputs, dry_run
-    )
+    layers = overlay.prepare_overlay_layers(board, outputs, dry_run)
 
-    planner = ReturnViaPlanner()
+    planner = ReturnViaPlanner(progress)
+    result: RunResult | None = None
     if check:
-        snapshot, plan = measure_only(kicad, board, refill)
+        snapshot, plan = measure_only(kicad, board, refill, progress)
     else:
         result = run_placement(
             planner,
@@ -395,15 +421,21 @@ def execute(
                 refill=refill,
             ),
             kicad,
+            progress=progress,
         )
         snapshot, plan = result.snapshot, result.prune.plan
 
+    # A placement that attempted its commit is past its last stop point;
+    # one that committed nothing still stops before measuring.
+    committed = result is not None and result.commit is not CommitOutcome.NOTHING
+    after = progress.without_stop() if committed else progress
+    after.enter(Stage.MEASURE)
     grounds = planner.grounds(snapshot, options)
     fields = ReturnFields(with_returns(snapshot, plan.units))
     references = via_references(fields.snapshot, grounds)
     results = fields.measure(references, options.distance)
     logger.info(f"{COMMAND} returns" + (" (check only)" if check else ""))
-    log_results(references, results, options.distance)
+    unserved, total = log_results(references, results, options.distance)
 
     maps = copper_maps(fields, references, grounds)
     marks = markers(results, maps, options.distance)
@@ -420,6 +452,8 @@ def execute(
         maps = ring_maps(maps, marks, fields.grid)
         if not maps:
             logger.info("No unserved via ends: no heatmaps")
+    if outputs.render is not None or outputs.overlay:
+        after.enter(Stage.DRAW)
     if outputs.render is not None:
         if maps:
             render.render_panels(
@@ -441,8 +475,16 @@ def execute(
             )
         logger.info(f"Wrote {outputs.render}")
 
+    # After a lost placement push the overlay commit would go over the same
+    # connection; the PNGs are written for placing by hand instead.
+    place = layers.place and (
+        result is None or result.commit is not CommitOutcome.UNKNOWN
+    )
+    if layers.place and not place:
+        logger.warning(overlay.LOST_PUSH_OVERLAY_MESSAGE)
+    overlays_placed = False
     if outputs.overlay:
-        overlay.show_overlays(
+        overlays_placed = overlay.show_overlays(
             board,
             (
                 lambda out_dir: render.write_overlays(
@@ -453,7 +495,19 @@ def execute(
             else None,
             snapshot,
             outputs,
-            place_overlay,
+            place,
             OVERLAY_COMMIT,
             unserved_markers(results, snapshot.vias) if check else None,
+            after,
         )
+    return ReturnResult(
+        distance=options.distance,
+        unserved=unserved,
+        total=total,
+        placement=result,
+        unfixable=0 if result is None else result.unfixable,
+        forced=sum(u.forced for u in plan.units),
+        full_map=full_map,
+        layers_enabled=layers.enabled,
+        overlays_placed=overlays_placed,
+    )

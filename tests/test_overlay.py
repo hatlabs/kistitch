@@ -1039,7 +1039,8 @@ def test_prepare_overlay_layers_enables_missing_layers_keeping_every_enabled_one
         dry_run=False,
     )
 
-    assert ready
+    assert ready.place
+    assert ready.enabled == ("User.1", "User.3", "User.4")
     [(count, layers)] = board.set_calls
     assert count == len(COPPER_4)
     assert set(kept) <= set(layers)
@@ -1065,11 +1066,24 @@ def test_prepare_overlay_layers_leaves_the_layers_alone_when_all_are_enabled():
         enabled=(BL.BL_User_1, BL.BL_User_2, BL.BL_User_3, BL.BL_User_4)
     )
 
-    assert overlay.prepare_overlay_layers(
+    ready = overlay.prepare_overlay_layers(
         board,  # type: ignore[arg-type]
         overlay.Outputs(overlay=True),
         dry_run=False,
     )
+
+    assert ready == overlay.PreparedLayers(place=True, enabled=())
+    assert board.set_calls == []
+
+
+def test_prepare_overlay_layers_without_overlays_asked_places_nothing():
+    # Too few overlay layers would raise if overlays were asked for.
+    board = LayersBoard()
+    outputs = overlay.Outputs(overlay=False, overlay_layers=("User.1",))
+
+    ready = overlay.prepare_overlay_layers(board, outputs, dry_run=False)  # type: ignore[arg-type]
+
+    assert ready == overlay.PreparedLayers(place=False, enabled=())
     assert board.set_calls == []
 
 
@@ -1082,7 +1096,7 @@ def test_prepare_overlay_layers_in_dry_run_warns_without_enabling(log):
         dry_run=True,
     )
 
-    assert not ready
+    assert ready == overlay.PreparedLayers(place=False, enabled=())
     assert board.set_calls == []
     assert any("User.1" in m and "PNGs only" in m for m in log)
 
