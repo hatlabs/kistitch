@@ -41,7 +41,7 @@ REFILL_TIMEOUT_S = 300.0
 REFILL_POLL_S = 1.0
 REFILLS_OFF_MESSAGE = (
     "Automatic zone refills are off: using the zone fills as they are; "
-    "refill zones in KiCad (press B) after edits"
+    "refill zones in KiCad (press B) before running kistitch"
 )
 COMMIT_PREFIX = "kistitch"
 

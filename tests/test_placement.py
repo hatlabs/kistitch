@@ -1084,6 +1084,13 @@ def refills_off_lines(log):
     return [line for line in log if commit.REFILLS_OFF_MESSAGE in line]
 
 
+def test_refills_off_message_asks_for_a_refill_before_the_run():
+    # A refill during the run changes the fills and fails it with
+    # BoardChangedError, so the message must not invite one.
+    assert "before running kistitch" in commit.REFILLS_OFF_MESSAGE
+    assert "after edits" not in commit.REFILLS_OFF_MESSAGE
+
+
 def test_run_without_refills_refills_neither_before_nor_after_the_commit(
     saved_board, log
 ):

@@ -150,7 +150,7 @@ Notes:
 
 ### Zone refills
 
-By default kistitch refills the zones before measuring, placing or picking the vias for `clear --vias`, and after committing or clearing vias, so every run works from current fills and leaves the board filled. Each refill adds an undo step in KiCad, so undoing a placement takes one Ctrl+Z for the refill after the commit and one for the commit. `kistitch --no-refill <command>` turns all of these off: the run uses the zone fills as they are and logs that once, and refilling in KiCad (press B) after edits is up to you. With stale fills, the planner and heatmaps see the old copper. DRC is unaffected: it refills its own copy of the board.
+By default kistitch refills the zones before measuring, placing or picking the vias for `clear --vias`, and after committing or clearing vias, so every run works from current fills and leaves the board filled. Each refill adds an undo step in KiCad, so undoing a placement takes one Ctrl+Z for the refill after the commit and one for the commit. `kistitch --no-refill <command>` turns all of these off: the run uses the zone fills as they are and logs that once, and refilling in KiCad (press B) before running kistitch is up to you. With stale fills, the planner and heatmaps see the old copper. DRC is unaffected: it refills its own copy of the board.
 
 ### Dry runs
 
