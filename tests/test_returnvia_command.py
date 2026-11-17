@@ -17,6 +17,7 @@ from kistitch import cli, drc, overlay, pourstitch_command, render, returnvia_co
 from kistitch.commit import (
     MARKER_LAYER,
     CommitOutcome,
+    CreateItemsError,
     Marker,
     MarkerKind,
     eco2_segment,
@@ -395,8 +396,9 @@ def test_no_unserved_via_gets_no_heatmap(fakes, tmp_path: Path):
     fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
     board = Board()
 
-    run(board, overlay=True)
+    result = run(board, overlay=True)
 
+    assert not result.overlays_placed
     assert fakes.created == []
     assert board.calls == ["refill_zones"]
 
@@ -810,7 +812,23 @@ def test_check_returns_the_view_and_the_layers_it_enabled(fakes):
 
     assert result.full_map is True
     assert result.layers_enabled == ("User.3", "User.4")
+    assert result.overlays_placed
     assert (result.unserved, result.total) == (0, 1)
+
+
+def test_overlay_images_kicad_refuses_are_reported_not_placed(
+    fakes, monkeypatch, png_dir
+):
+    def refuse(board, items):
+        raise CreateItemsError("no overlapping layers")
+
+    monkeypatch.setattr(overlay, "create_checked", refuse)
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+
+    result = run(Board(), overlay=True)
+
+    assert not result.overlays_placed
+    assert list(png_dir.glob("*.png"))
 
 
 def test_place_returns_the_placement_and_its_unfixable_and_forced_vias(fakes):

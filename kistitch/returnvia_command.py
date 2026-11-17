@@ -344,6 +344,7 @@ class ReturnResult:
     forced: int
     full_map: bool
     layers_enabled: tuple[str, ...]
+    overlays_placed: bool
 
 
 def log_results(
@@ -463,8 +464,9 @@ def execute(
             )
         logger.info(f"Wrote {outputs.render}")
 
+    overlays_placed = False
     if outputs.overlay:
-        overlay.show_overlays(
+        overlays_placed = overlay.show_overlays(
             board,
             (
                 lambda out_dir: render.write_overlays(
@@ -488,4 +490,5 @@ def execute(
         forced=sum(u.forced for u in plan.units),
         full_map=full_map,
         layers_enabled=layers.enabled,
+        overlays_placed=overlays_placed,
     )

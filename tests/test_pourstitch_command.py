@@ -13,6 +13,7 @@ from kistitch.commit import (
     MARKER_LAYER,
     REFILLS_OFF_MESSAGE,
     CommitOutcome,
+    CreateItemsError,
     eco2_segment,
 )
 from kistitch.placement import RunResult, RunSettings
@@ -158,6 +159,7 @@ def test_check_returns_the_uncovered_area_per_net(fakes):
     )
 
     assert result.placement is None
+    assert not result.overlays_placed
     assert result.distance == OPTIONS.max_distance
     (gnd,) = result.coverage
     assert gnd == NetCoverage("GND", pytest.approx(len(LAYERS) * POUR_MM2), 0.0)
@@ -203,8 +205,14 @@ def test_check_with_overlay_creates_only_the_image_commit(
     outputs = overlay.Outputs(overlay=True)
     monkeypatch.chdir(tmp_path)
 
-    pourstitch_command.execute(OPTIONS, outputs, check=True, kicad=KiCad(board))  # type: ignore[arg-type]
+    result = pourstitch_command.execute(
+        OPTIONS,
+        outputs,
+        check=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
 
+    assert result.overlays_placed
     assert placements == []
     assert board.calls == [
         "refill_zones",
@@ -318,13 +326,39 @@ def test_disabled_overlay_layer_in_dry_run_keeps_the_pngs(fakes, png_dir, log):
     board = Board(enabled=())
     outputs = overlay.Outputs(overlay=True)
 
-    pourstitch_command.execute(OPTIONS, outputs, dry_run=True, kicad=KiCad(board))  # type: ignore[arg-type]
+    result = pourstitch_command.execute(
+        OPTIONS,
+        outputs,
+        dry_run=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
 
+    assert not result.overlays_placed
     assert board.calls == []
     assert created == []
     pngs = sorted(png_dir.glob("*.png"))
     assert len(pngs) == len(LAYERS)
     assert all(any(str(p) in line for line in log) for p in pngs)
+
+
+def test_overlay_images_kicad_refuses_are_reported_not_placed(
+    fakes, monkeypatch, png_dir
+):
+    def refuse(board, items):
+        raise CreateItemsError("no overlapping layers")
+
+    monkeypatch.setattr(overlay, "create_checked", refuse)
+    board = Board()
+
+    result = pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
+
+    assert not result.overlays_placed
+    assert len(list(png_dir.glob("*.png"))) == len(LAYERS)
 
 
 def test_too_few_overlay_layers_is_an_error(fakes):

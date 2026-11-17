@@ -61,6 +61,7 @@ class StitchResult:
     coverage: tuple[NetCoverage, ...]
     placement: RunResult | None
     layers_enabled: tuple[str, ...]
+    overlays_placed: bool
 
 
 def _log_coverage(
@@ -174,9 +175,10 @@ def execute(
             )
         logger.info(f"Wrote {outputs.render}")
 
+    overlays_placed = False
     if outputs.overlay:
         # On the board, existing and planned vias show as themselves.
-        overlay.show_overlays(
+        overlays_placed = overlay.show_overlays(
             board,
             (
                 lambda out_dir: render.write_overlays(
@@ -196,4 +198,5 @@ def execute(
         coverage=by_net(coverage),
         placement=result,
         layers_enabled=layers.enabled,
+        overlays_placed=overlays_placed,
     )

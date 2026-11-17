@@ -342,11 +342,12 @@ def show_overlays(
     place: bool,
     commit_label: str,
     markers: Sequence[Marker] | None = None,
-) -> None:
+) -> bool:
     """Write the per-copper-layer PNGs and place them as this run's overlay
-    set, or log where they would go. `write_pngs` None means no images: the
-    previous set is only removed. `markers`, unless None, replace the marker
-    layer's shapes in the overlay commit, so they change only if it lands.
+    set, or log where they would go; True once the images are on the board.
+    `write_pngs` None means no images: the previous set is only removed.
+    `markers`, unless None, replace the marker layer's shapes in the overlay
+    commit, so they change only if it lands.
 
     The board embeds the image data, so the PNGs go to a temporary directory
     that is removed once they are placed. When they are not, they stay there
@@ -361,7 +362,7 @@ def show_overlays(
             place_overlays(
                 board, [], placement, outputs.overlay_layers, commit_label, markers
             )
-        return
+        return False
     out_dir = Path(tempfile.mkdtemp(prefix=PNG_DIR_PREFIX))
     try:
         pngs = write_pngs(out_dir)
@@ -387,3 +388,4 @@ def show_overlays(
     elif not place:
         for i in images:
             logger.info(f"Overlay not placed: {i.describe()}")
+    return placed
