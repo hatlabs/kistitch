@@ -29,6 +29,8 @@ Tests never need a running KiCad. The panel's widget tests run on Qt's offscreen
 
 `tools/make_icons.py` draws the plugin icons in `pcm/`. Its output is committed: edit the script, run it with `.venv/bin/python`, and commit the regenerated files.
 
+The return-current figures in `docs/images/` are rendered from the SolidCraft models (`return-current-*.sc`) and annotated in Affinity (`return-current-*.afdesign`), which exports the committed JPGs.
+
 ## Releasing
 
 Every merge to main stages a release: a pre-release tagged `v<VERSION>+<N>_pre` and a draft `v<VERSION>+<N>`, where N counts the builds of that version.
