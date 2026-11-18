@@ -10,11 +10,15 @@ The return distance heatmap on F.Cu of a four-layer board, before and after plac
 
 ## Why
 
-At high frequencies, the return current of a signal flows on the nearest reference plane, concentrated beneath the trace. A digital signal's bandwidth is about 0.35/t_r, so a 1 ns edge reaches 350 MHz whatever the clock rate: modern edge rates make every digital signal high frequency in this sense.
+At high frequencies, the return current of a signal flows on the nearest reference plane, directly beneath the trace. In the figures below, forward current is blue and return current red.
 
-A signal going through a via from L1 to L4 changes its reference plane from L2 to L3, and its return current has to cross between the two planes. A ground via next to the signal via gives it a short path. Without one, the return current takes a longer path between the planes, and the thick core between L2 and L3 of a typical four-layer board makes that loop larger still.
+![A Z-shaped trace from a driver to a sink over a ground plane; the return current on the plane follows the trace back to the driver](https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/return-current-single-plane.jpg)
 
-<img src="https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/return-path.svg" alt="Cross-section of a four-layer board: a signal runs on L1, down a via to L4 and on along L4; its return current runs under it on L3, up a nearby ground via and back along L2">
+On a trace over a plane, the return current follows the trace like this from about 100 kHz up. A digital signal's bandwidth is about 0.35/t_r, so a 1 ns edge reaches 350 MHz whatever the clock rate: modern edge rates make every digital signal high frequency in this sense.
+
+![A four-layer board with translucent ground planes on L2 and L3: the signal runs on L1, through a via and on along L4; its return current follows it on L3, jumps to L2 through a ground via next to the signal via, and follows the L1 trace back to the driver](https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/return-current-four-layer.jpg)
+
+A signal going through a via from L1 to L4 changes its reference plane from L2 to L3. The return current follows the trace on each plane and crosses between the planes through a ground via next to the signal via. Without a via nearby, the return current spreads out across the planes at the layer transition, and the larger current loop radiates a magnetic field: noise emission.
 
 Howard Johnson's ["Short-Term Impedance of Planes"](https://www.sigcon.com/Pubs/news/6_05.htm) covers the physics in more depth.
 
