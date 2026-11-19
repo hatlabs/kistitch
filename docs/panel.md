@@ -22,7 +22,7 @@ The four steps, in their usual order:
 
 1. **Pad vias**: **Place** runs `padvia`. Adjust the pads by hand before going on.
 2. **Power stitching**: **Heatmap** places the coverage heatmap, as `pourstitch --power --check --overlay`, and **Place** runs `pourstitch --power`.
-3. **Return vias**: **Heatmap** shows the unserved vias, as `returnvia --check --overlay`. Its menu adds **All copper**, as `--full-map`. **Place** runs `returnvia`.
+3. **Return vias**: **Heatmap** shows the unserved vias and pads, as `returnvia --check --overlay`. Its menu adds **All copper**, as `--full-map`. **Place** runs `returnvia`.
 4. **Ground stitching**: **Heatmap** and **Place**, as for power stitching, run `pourstitch` on the ground nets.
 
 Each Heatmap, like each Place, removes every shape on User.Eco2, hand-drawn ones included, before adding its own markers.

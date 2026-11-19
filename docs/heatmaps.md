@@ -21,7 +21,7 @@ kistitch pourstitch --power --check --render power.png
 kistitch pourstitch --check --overlay
 ```
 
-A `--check --overlay` run also replaces every shape on User.Eco2, hand-drawn ones included, in the same undo step as the images: `returnvia` draws a circle at each via with an unserved end, and `pourstitch` only removes the old markers. See [Markers and the DRC check](markers-and-drc.md#markers) for when markers change.
+A `--check --overlay` run also replaces every shape on User.Eco2, hand-drawn ones included, in the same undo step as the images: `returnvia` draws a circle at each via or through-hole pad with an unserved end, and `pourstitch` only removes the old markers. See [Markers and the DRC check](markers-and-drc.md#markers) for when markers change.
 
 ## Pour stitching heatmap
 
@@ -38,17 +38,17 @@ Other-net clearances are ignored for this, so a spot blocked only by other coppe
 
 ## Return via heatmap
 
-`returnvia --render PATH` writes one panel per copper layer on which an unserved via end lies. By default each panel shows only the copper inside the rings around the unserved via ends, which picks out the problem vias. With nothing unserved, the figure is the board outline with a title saying so. `--overlay` then places no images and removes the previous ones.
+`returnvia --render PATH` writes one panel per copper layer on which an unserved via or pad end lies. By default each panel shows only the copper inside the rings around the unserved ends, which picks out the problem vias and pads. With nothing unserved, the figure is the board outline with a title saying so. `--overlay` then places no images and removes the previous ones.
 
-`--full-map` shows the copper of every layer on which a via that changes layers connects. That is every net's tracks, pads and pours, ground pours included, since a via placed anywhere in that copper would need its own return, and the ground vias. Other vias show only on layers where they have a measured end.
+`--full-map` shows the copper of every layer on which a via or through-hole pad that changes layers connects. That is every net's tracks, pads and pours, ground pours included, since a via placed anywhere in that copper would need its own return, and the ground vias. Signal vias show only on layers where they have a measured end.
 
-Each pixel is coloured by the distance through its reference plane to the nearest ground return. Its reference plane is chosen as for a via end there: the nearest other copper layer in stack order with a ground zone outline at that pixel (see [Return vias](return-vias.md#which-vias-are-measured)).
+Each pixel is coloured by the distance through its reference plane to the nearest ground return. Its reference plane is chosen as for a via or pad end there: the nearest other copper layer in stack order with a ground zone outline at that pixel (see [Return vias](return-vias.md#which-vias-are-measured)).
 
-Around each via:
+Around each via or through-hole pad:
 
-- A via end shows its own measured return distance over the via, and over its net's copper in its antipad, the void around the via in the reference plane. This includes antipads that merge with others. Where antipads merge, the copper shows the worst of their distances.
+- A via or pad end shows its own measured return distance over its copper, and over its net's copper in its antipad, the void around it in the reference plane; for a pad that is its clearance hole. This includes antipads that merge with others. Where antipads merge, the copper shows the worst of their distances.
 - Another net's copper over the antipad stays purple: it has no return there.
-- A signal through-hole pad shows the distance a via at its centre would have, over the pad and its clearance hole. Pads are never reported as unserved.
+- An exempt through-hole pad, connected on fewer than two layers, has no end: its copper shows its plane's field like other copper, purple over its clearance hole.
 
 The colour scale:
 
@@ -57,9 +57,9 @@ The colour scale:
 - Purple copper has no path to a return: it lies over a slot or void in its reference plane.
 - Copper with no ground zone outline on any other layer has no reference plane and is left blank, such as the ground side of a two-layer board.
 
-A pink ring of radius `--distance` marks each unserved via end on its own layer. Layers with identical maps share a panel.
+A pink ring of radius `--distance` marks each unserved via or pad end on its own layer. Layers with identical maps share a panel.
 
-`returnvia` logs the number of exempt vias, and how many vias and via-plane returns are unserved. Set `LOGURU_LEVEL=DEBUG` to list each unserved via end with its distance or the reason it can't be served.
+`returnvia` logs how many vias and pads are exempt, how many are unserved, and how many of their plane returns are unserved. Set `LOGURU_LEVEL=DEBUG` to list each unserved via or pad end with its distance or the reason it can't be served.
 
 ## Overlays on the board
 

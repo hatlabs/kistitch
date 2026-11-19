@@ -6,7 +6,7 @@ kistitch places ground return vias, pad vias and pour stitching vias on the boar
 |---|---|
 | ![Return distance heatmap on F.Cu before placing return vias, with many rings around unserved vias](https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/returnvia-before.png) | ![Return distance heatmap on F.Cu after placing return vias, with some rings left](https://raw.githubusercontent.com/hatlabs/kistitch/main/docs/images/returnvia-after.png) |
 
-The return distance heatmap on F.Cu of a four-layer board, before and after placing return vias. Each pink ring marks a via end with no ground return within 1.5 mm through its reference plane. The rings left after the run mark the vias the planner couldn't serve; those you fix by hand.
+The return distance heatmap on F.Cu of a four-layer board, before and after placing return vias. Each pink ring marks a via or pad end with no ground return within 1.5 mm through its reference plane. The rings left after the run mark the vias and pads the planner couldn't serve; those you fix by hand.
 
 ## Why
 
@@ -87,7 +87,7 @@ The panel runs on the board open in the PCB editor. **Ground nets** starts with 
 
 1. **Pad vias.** Place, then look at the circles on User.Eco2: each marks a pad where no via fits. Adjust those pads by hand.
 2. **Power stitching.** Place, then Heatmap. Add vias by hand at the ends of power pours that are still pink, and where a pour carries high current.
-3. **Return vias.** Place. It gives a return to every via on a non-ground net, the power stitching vias included. Fix the vias it circles by hand, then run Heatmap to confirm none is left.
+3. **Return vias.** Place. It gives a return to every via and through-hole pad on a non-ground net, the power stitching vias included. Fix the vias and pads it circles by hand, then run Heatmap to confirm none is left.
 4. **Ground stitching.** Place. It counts the return vias as ground stitches, so it only fills the gaps they leave. Around an RF section, add ground vias by hand: 3 mm is not dense enough there (see [Pour stitching](https://github.com/hatlabs/kistitch/blob/main/docs/pour-stitching.md#why-power-is-sparse-and-ground-dense)).
 
 Power stitching goes before return vias because its vias need returns, and ground stitching goes last because the return vias count towards it.
@@ -116,7 +116,7 @@ Finish with Heatmap on Power stitching and on Return vias. Steps 3 and 4 place g
 
 ## How it works
 
-**Return vias.** For each end of a signal via, kistitch takes the nearest other copper layer with a ground zone at the via as its reference plane, and measures the distance through that plane's ground fill to the nearest ground via or through-hole pad. For a via beyond the limit, it tries spots on rings around it, nearest first, and takes the first with full clearance that serves every unserved end.
+**Return vias.** For each end of a signal via, kistitch takes the nearest other copper layer with a ground zone at the via as its reference plane, and measures the distance through that plane's ground fill to the nearest ground via or through-hole pad. A signal through-hole pad connected on two or more layers is measured, reported and given a return via like a via; a pad or via connected on fewer layers is exempt. Ground through-hole pads are returns. For a via or pad beyond the limit, it tries spots on rings around it, nearest first, and takes the first with full clearance that serves every unserved end.
 
 **Pour stitching.** kistitch rasterises each net's pours at 0.1 mm, places vias on a square lattice, then fills the remaining gaps one at a time, farthest point first. A finger 2 mm from a via across a gap but 8 mm away along the copper counts as 8 mm. Narrow spots get a smaller fallback via.
 

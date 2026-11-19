@@ -35,8 +35,8 @@ Other nets' pours are not obstacles: they refill around the new vias, as in any 
 
 Spots that need attention get markers on User.Eco2:
 
-- A circle where no via fits, from `returnvia` and `padvia`. It is at least 0.7 mm across and reaches 0.3 mm past the copper it marks, so copper drawn in front can't hide it: on a `padvia` pad, it encloses the pad.
-- A circle at each via with an unserved end, after `returnvia --check --overlay`.
+- A circle where no via fits, from `returnvia` and `padvia`. It is at least 0.7 mm across and reaches 0.3 mm past the copper it marks, so copper drawn in front can't hide it: on a pad, it encloses the pad.
+- A circle at each via or through-hole pad with an unserved end, after `returnvia --check --overlay`.
 - A square at a new DRC violation that couldn't be pinned on a single via, including pour splits (below).
 
 `pourstitch` doesn't mark uncovered spots; its [heatmap](heatmaps.md) shows them as areas.
@@ -46,7 +46,7 @@ Spots that need attention get markers on User.Eco2:
 The markers always show the latest run's findings:
 
 - Each placing run of `returnvia`, `padvia` or `pourstitch` that doesn't stop with an error replaces the previous markers, whichever command made them. It removes every shape on User.Eco2, hand-drawn ones included, in the same undo step, even when it places nothing. After `padvia` then `pourstitch`, only `pourstitch`'s markers remain.
-- A `--check --overlay` run replaces them too, in the undo step that places the overlay images. `returnvia` draws a circle at each via with an unserved end, matching the heatmap's rings, and `pourstitch` only removes the old markers. A `--check --overlay` run with nothing to show, such as a `returnvia` check with every via end served, still removes the old markers.
+- A `--check --overlay` run replaces them too, in the undo step that places the overlay images. `returnvia` draws a circle at each via or through-hole pad with an unserved end, matching the heatmap's rings, and `pourstitch` only removes the old markers. A `--check --overlay` run with nothing to show, such as a `returnvia` check with every via and pad end served, still removes the old markers.
 
 These leave the markers alone:
 
