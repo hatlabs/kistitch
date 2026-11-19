@@ -138,17 +138,24 @@ class ReturnFields:
     def _seeds(
         self, centre: Point2, drill: float, win: tuple[slice, slice], inside: BoolMap
     ) -> list[Pixel]:
-        """The pixels within the return's seed reach, else its centre pixel.
-        The in-grid pixels of its disc when the centre is off the grid, as on
-        or past the board outline."""
+        """The return's seed pixels.
+
+        With its centre off the grid, as on or past the board outline: the
+        in-grid pixels of its disc within its seed reach, else all of them.
+        Otherwise the pixels within its seed reach, else its centre pixel
+        when that reach covers no pixel centre.
+        """
         g = self.grid
         px = g.index(centre)
+        reach = g.mask(Point(centre).buffer(self._seed_reach(drill)), win)
         if not g.contains(px):
-            seeds = inside
-        else:
-            seeds = g.mask(Point(centre).buffer(self._seed_reach(drill)), win)
+            seeds = inside & reach
             if not seeds.any():
-                return [px]
+                seeds = inside
+        elif reach.any():
+            seeds = reach
+        else:
+            return [px]
         rr, cc = np.nonzero(seeds)
         return list(zip((rr + win[0].start).tolist(), (cc + win[1].start).tolist()))
 

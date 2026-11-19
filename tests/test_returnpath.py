@@ -259,6 +259,25 @@ def test_return_past_the_outline_does_not_serve_the_far_side(edge):
     assert not any(r.served for r in results)
 
 
+CASTELLATION_DRILL = 1.0
+CASTELLATION_RADIUS = 0.9
+
+
+@pytest.mark.parametrize("edge", EDGES)
+def test_castellated_return_measures_alike_on_every_outline_edge(edge):
+    centres = 2.3
+    sig = inset(edge, centres)
+    pos = inset(edge, 0.0)
+    shapes = {L: Point(pos).buffer(CASTELLATION_RADIUS) for L in FOUR_LAYERS}
+    pin = Pad("c", None, "GND", PadKind.PTH, "1", pos, CASTELLATION_DRILL, shapes)
+    snap = board([sig], pads=[pin])
+
+    results = results_at(snap, sig)
+    assert len(results) == len(INNER)
+    for res in results:
+        assert_close(res.distance, centres - CASTELLATION_DRILL / 2 - VIA_DRILL / 2)
+
+
 def test_ground_via_of_another_net_does_not_serve_the_plane():
     iso = box(5, 5, 15, 15)
     antipads = holes((SIG, ANTIPAD), (polar(1.0, 0), ANTIPAD))
