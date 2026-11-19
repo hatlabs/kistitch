@@ -43,7 +43,7 @@ Each via end is measured against the ground net whose zone on its reference plan
 
 The planner measures candidate spots the same way as the check. For each via and ground net with unserved ends, it tries spots on rings around the via, nearest first, out to where the straight line between the two drill walls reaches `--distance` plus the 0.1 mm margin. It takes the first spot with full clearance that serves every one of those ends. A spot across a slot in the plane is rejected when the path around the slot is too long.
 
-A ground pin whose drill wall lies within `--distance` of a signal pin's serves it like a ground via. On a 2.54 mm header with 1 mm drills, neighbouring pins' drill walls are 1.54 mm apart, so a ground pin next to a signal pin just serves it at the default distance. A pin with no ground pin that close gets a return via beside the row where one fits, or is reported as unfixable.
+A ground pin is a return like a ground via: it serves a signal pin's end when it is on that end's plane's ground net and its drill wall is within `--distance` of the signal pin's through the fill. On a 2.54 mm header with 1 mm drills, neighbouring pins' drill walls are 1.54 mm apart, so a ground pin next to a signal pin just serves it at the default distance. A pin with no ground pin that close gets a return via beside the row where one fits, or is reported as unfixable.
 
 A return via is placed only where the ground net's zone outlines cover at least two copper layers, and it must sit inside the fill on each of them. Its size comes from the ground net's netclass, or from `--via DIAMETER/DRILL`.
 
@@ -59,13 +59,13 @@ The planner measures each ground net's plane as it was filled before the run. A 
 
 ## Forced vias
 
-`returnvia --force` adds a second pass. Every via or pad that is still without a return gets one at the spot with the most clearance to other-net copper whose drill wall lies within `--distance` of the via's or pad's, nearest first among equally clear spots. A forced via never overlaps other-net copper and keeps the hole-to-hole and same-net pad rules. Only the clearance to other-net copper is relaxed, so it may violate clearance.
+`returnvia --force` adds a second pass. A via or pad that is still without a return, and that a return via could serve, gets one where one fits: at the spot with the most clearance to other-net copper whose drill wall lies within `--distance` of the via's or pad's, nearest first among equally clear spots. A forced via never overlaps other-net copper and keeps the hole-to-hole and same-net pad rules. Only the clearance to other-net copper is relaxed, so it may violate clearance.
 
 Forced vias survive the DRC check despite clearance violations and get no marker. The log lists each forced via's net and position, and KiCad's own DRC finds the ones that violate clearance, so you can move them by hand.
 
 A forced via is a placeholder. It needs the ground zone outlines at its spot but may lie outside the fill, so it serves nothing in the run: the run's log and heatmaps still count its signal via or pad as unserved. A later `returnvia --check` counts it like any other ground via once the refilled fill reaches it, clearance violation or not. Other vias and pads of the same ground net whose drill walls lie within `--distance` of its own in a straight line get no forced via of their own. They are reported as unfixable with "relies on forced via at (x, y)" and get a circle marker, because a via placed by hand in place of the forced one may serve them too. After moving a forced via, refill the zones, run `returnvia --check` to confirm its return, and run KiCad's DRC to confirm its clearance.
 
-Via ends outside every ground zone, or with no ground fill near the via, are never forced.
+Via and pad ends outside every ground zone, or with no ground fill nearby, are never forced.
 
 ## Stackup assumption
 
