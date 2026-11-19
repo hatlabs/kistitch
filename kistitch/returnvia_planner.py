@@ -70,9 +70,9 @@ def _angles(count: int) -> list[float]:
     return [2 * math.pi * k / count for k in range(count)]
 
 
-def _barrels(c: LayerChange, size: ViaSize) -> float:
-    """How much shorter than their centre distance the straight line between
-    `c`'s drill and a return via's of `size` is."""
+def _drill_radii(c: LayerChange, size: ViaSize) -> float:
+    """Sum of the drill radii of `c` and a via of `size`; centre distance
+    minus this is the gap between drill walls."""
     return (c.drill + size.drill) / 2
 
 
@@ -94,7 +94,7 @@ def _force_spot(
     """
     best: tuple[tuple[float, float], Point2, float] | None = None
     start = c.inscribed + size.diameter / 2
-    stop = distance + _barrels(c, size) - ROUNDING_MARGIN
+    stop = distance + _drill_radii(c, size) - ROUNDING_MARGIN
     for a in _angles(FORCE_RING_ANGLES):
         for r in _radii(start, stop):
             pos = _ring_point(c.position, r, a)
@@ -244,7 +244,7 @@ class _Round:
             if u.net == t.ground
             and not u.forced
             and math.dist(u.position, t.change.position)
-            <= reach + _barrels(t.change, u.size)
+            <= reach + _drill_radii(t.change, u.size)
         ]
         return tuple(
             p
@@ -264,7 +264,7 @@ class _Round:
                 if u.forced
                 and u.net == t.ground
                 and math.dist(u.position, t.change.position)
-                <= reach + _barrels(t.change, u.size)
+                <= reach + _drill_radii(t.change, u.size)
             ),
             None,
         )
@@ -282,7 +282,7 @@ class _Round:
         The rings reach as far as a straight line between the drills can
         serve."""
         start = c.inscribed + size.diameter / 2 + OTHER_NET_CLEARANCE
-        stop = served_within(self.distance) + _barrels(c, size) - ROUNDING_MARGIN
+        stop = served_within(self.distance) + _drill_radii(c, size) - ROUNDING_MARGIN
         clear = False
         for r in _radii(start, stop):
             for a in _angles(RING_ANGLES):

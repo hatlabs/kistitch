@@ -160,8 +160,9 @@ class ReturnFields:
         return list(zip((rr + win[0].start).tolist(), (cc + win[1].start).tolist()))
 
     def _seed_reach(self, drill: float) -> float:
-        """Radius of a return's seeds: its drill rounded to the nearest pixel,
-        which errs as much inward as outward, as a centre pixel did."""
+        """Radius of a return's seeds: half a pixel past its drill wall. The
+        half pixel rounds the drill to the nearest pixel, so the seed edge
+        errs as much inward as outward."""
         return (drill + self.grid.pixel) / 2
 
     def _returns(self, plane: ReferencePlane) -> list[Return]:
@@ -184,7 +185,9 @@ class ReturnFields:
             and plane.layer in p.shapes
         ]
         reached = [(c, d, shape.buffer(THERMAL_REACH)) for c, d, shape in candidates]
-        return [r for r in reached if self._reaches_fill(plane, r[2])]
+        return [
+            (c, d, disc) for c, d, disc in reached if self._reaches_fill(plane, disc)
+        ]
 
     def _reaches_fill(self, plane: ReferencePlane, disc: BaseGeometry) -> bool:
         return bool(touch(self.grid, self.fill(plane), disc))
