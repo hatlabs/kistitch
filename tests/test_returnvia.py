@@ -18,8 +18,8 @@ from kistitch.returnvia import (
     NoGroundNetsError,
     ReferencePlane,
     ReturnViaOptions,
+    change_references,
     resolve_ground_nets,
-    via_references,
 )
 from kistitch.returnvia_planner import ReturnViaPlanner
 from kistitch.snapshot import (
@@ -608,7 +608,7 @@ SIG_AT = (10, 10)
 
 
 def references(snap, ground_nets=GROUNDS):
-    return via_references(snap, ground_nets)
+    return change_references(snap, ground_nets)
 
 
 def front_track(start=(5, 10), end=SIG_AT, net="SIG"):
@@ -707,7 +707,7 @@ def through_via(zones=None, ground_nets=GROUNDS):
     snap = snapshot(
         vias=[via("SIG", *SIG_AT)], tracks=[front_track(), back_track()], zones=zones
     )
-    (r,) = via_references(snap, resolve_ground_nets(snap, ground_nets))
+    (r,) = change_references(snap, resolve_ground_nets(snap, ground_nets))
     return r
 
 
@@ -797,5 +797,135 @@ def test_inner_layer_equidistant_from_two_planes_takes_the_upper_one():
         zones=[zone("GND", ["F.Cu", "In2.Cu"], GND_AREA)],
     )
 
-    (r,) = via_references(snap, ["GND"])
+    (r,) = change_references(snap, ["GND"])
     assert planes_by_layer(r)["In1.Cu"] == ReferencePlane("F.Cu", "GND")
+
+
+# ---- signal PTH pads -------------------------------------------------------------
+
+PAD_RADIUS = 0.8
+
+
+def pth(net="SIG", pos=SIG_AT, layers=FOUR_LAYERS, shape=None):
+    """A PTH pad with `shape` (default a disc) on each of `layers`."""
+    copper = shape if shape is not None else disk(pos, PAD_RADIUS)
+    return pad(net, pos, {L: copper for L in layers}, kind=PadKind.PTH, drill=1.0)
+
+
+def pad_references(snap):
+    return [r for r in references(snap) if r.change.id == pth().id]
+
+
+def pad_layers(snap):
+    (r,) = pad_references(snap)
+    return [c.layer for c in r.layers]
+
+
+def test_signal_pth_pad_with_tracks_on_two_layers_changes_layers():
+    snap = snapshot(pads=[pth()], tracks=[front_track(), back_track()])
+
+    (r,) = pad_references(snap)
+    assert r.change.position == SIG_AT
+    assert r.change.net == "SIG"
+    assert planes_by_layer(r) == {
+        "F.Cu": ReferencePlane("In1.Cu", "GND"),
+        "B.Cu": ReferencePlane("In2.Cu", "GND"),
+    }
+    assert not r.exempt
+
+
+def test_signal_pth_pad_routed_on_one_layer_is_exempt():
+    (r,) = pad_references(snapshot(pads=[pth()], tracks=[front_track()]))
+
+    assert [c.layer for c in r.layers] == ["F.Cu"]
+    assert r.exempt
+
+
+def test_signal_pth_pad_connects_through_its_own_nets_fill():
+    pour = zone("SIG", ["B.Cu"], box(8, 8, 12, 12))
+    snap = snapshot(
+        pads=[pth()],
+        tracks=[front_track()],
+        zones=[zone("GND", INNER, GND_AREA), pour],
+    )
+
+    assert pad_layers(snap) == ["F.Cu", "B.Cu"]
+
+
+def test_signal_pth_pad_connects_through_another_same_net_pad():
+    beside = pad("SIG", (11, 10), {"B.Cu": box(10.7, 9.7, 11.3, 10.3)})
+    snap = snapshot(pads=[pth(), beside], tracks=[front_track()])
+
+    assert pad_layers(snap) == ["F.Cu", "B.Cu"]
+
+
+def test_track_touching_the_pad_edge_connects():
+    edge_on = 10 + PAD_RADIUS + 0.1  # track half-width 0.1
+    snap = snapshot(
+        pads=[pth()],
+        tracks=[front_track(), back_track(start=(15, 10), end=(edge_on, 10))],
+    )
+
+    assert pad_layers(snap) == ["F.Cu", "B.Cu"]
+
+
+def test_signal_pth_pad_connects_only_where_it_has_copper():
+    inner = track("SIG", "In1.Cu", (5, 12), SIG_AT)
+    snap = snapshot(
+        pads=[pth(layers=("F.Cu", "B.Cu"))],
+        tracks=[front_track(), inner, back_track()],
+    )
+
+    assert pad_layers(snap) == ["F.Cu", "B.Cu"]
+
+
+NOT_MEASURED_PADS = {
+    "ground-net": pth(net="GND"),
+    "netless": pth(net=""),
+    "npth": replace(pth(), kind=PadKind.NPTH),
+    "smd": replace(pth(), kind=PadKind.SMD, drill=0.0),
+}
+
+
+@pytest.mark.parametrize("p", NOT_MEASURED_PADS.values(), ids=NOT_MEASURED_PADS.keys())
+def test_only_signal_pth_pads_are_measured(p):
+    tracks = [front_track(net=p.net), back_track(net=p.net)]
+    assert references(snapshot(pads=[p], tracks=tracks)) == []
+
+
+def test_via_and_pad_at_one_spot_are_two_layer_changes():
+    snap = snapshot(
+        vias=[via("SIG", *SIG_AT)], pads=[pth()], tracks=[front_track(), back_track()]
+    )
+
+    assert len(references(snap)) == 2
+
+
+def test_via_radii_are_half_its_diameter():
+    (r,) = references(snapshot(vias=[via("SIG", *SIG_AT, dia=0.8)]))
+
+    assert r.change.inscribed == r.change.circumscribed == 0.4
+
+
+def test_round_pad_radii_are_its_radius():
+    (r,) = pad_references(snapshot(pads=[pth()]))
+
+    assert r.change.inscribed == pytest.approx(PAD_RADIUS, rel=0.01)
+    assert r.change.circumscribed == pytest.approx(PAD_RADIUS, rel=0.01)
+
+
+def test_rectangular_pad_radii_reach_its_short_side_and_its_corner():
+    half_w, half_h = 1.0, 0.5
+    x, y = SIG_AT
+    rect = box(x - half_w, y - half_h, x + half_w, y + half_h)
+    (r,) = pad_references(snapshot(pads=[pth(shape=rect)]))
+
+    assert r.change.inscribed == pytest.approx(half_h)
+    assert r.change.circumscribed == pytest.approx(math.hypot(half_w, half_h))
+
+
+def test_pad_radii_ignore_the_drill_hole_in_its_copper():
+    ring = disk(SIG_AT, PAD_RADIUS).difference(disk(SIG_AT, 0.5))
+    (r,) = pad_references(snapshot(pads=[pth(shape=ring)]))
+
+    assert r.change.inscribed == pytest.approx(PAD_RADIUS, rel=0.01)

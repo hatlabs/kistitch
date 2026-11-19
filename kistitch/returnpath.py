@@ -31,10 +31,11 @@ from kistitch.raster import (
 )
 from kistitch.returnvia import (
     OUTSIDE_GROUND,
+    ChangeReferences,
+    LayerChange,
     ReferencePlane,
-    ViaReferences,
+    change_references,
     resolve_ground_nets,
-    via_references,
 )
 from kistitch.snapshot import NoBoardOutlineError, PadKind, Point2, Snapshot
 
@@ -62,20 +63,28 @@ class Outcome(Enum):
 
 @dataclass(frozen=True)
 class PlaneReturn:
-    """Return distance of one signal via on one of its reference planes.
+    """Return distance of one signal via or PTH pad on one of its reference
+    planes.
 
     `layers` are the connected layers that reference the plane. `distance`
     is inf when no copper path reaches a return, and for the outcomes other
     than MEASURED. `plane` is None outside every ground zone.
     """
 
-    position: Point2
-    net: str
+    change: LayerChange
     layers: tuple[str, ...]
     plane: ReferencePlane | None
     distance: float
     served: bool
     outcome: Outcome
+
+    @property
+    def position(self) -> Point2:
+        return self.change.position
+
+    @property
+    def net(self) -> str:
+        return self.change.net
 
     @property
     def reason(self) -> str | None:
@@ -246,25 +255,25 @@ class ReturnFields:
         return win, _void(self.fill(plane)[win], near, local)
 
     def measure(
-        self, references: Iterable[ViaReferences], distance: float
+        self, references: Iterable[ChangeReferences], distance: float
     ) -> list[PlaneReturn]:
-        """One result per (non-exempt via, plane) and per layer with no plane."""
+        """One result per (non-exempt via or pad, plane) and per layer with
+        no plane."""
         out = []
         for refs in references:
             if refs.exempt:
                 continue
-            v = refs.via
+            c = refs.change
             for plane in refs.planes:
-                layers = tuple(c.layer for c in refs.layers if c.plane == plane)
-                found = self.distance_at(v.position, plane, distance)
+                layers = tuple(L.layer for L in refs.layers if L.plane == plane)
+                found = self.distance_at(c.position, plane, distance)
                 outcome = (
                     Outcome.MEASURED if found is not None else Outcome.NO_GROUND_FILL
                 )
                 d = math.inf if found is None else found
                 out.append(
                     PlaneReturn(
-                        v.position,
-                        v.net,
+                        c,
                         layers,
                         plane,
                         d,
@@ -274,16 +283,10 @@ class ReturnFields:
                 )
             out += [
                 PlaneReturn(
-                    v.position,
-                    v.net,
-                    (c.layer,),
-                    None,
-                    math.inf,
-                    False,
-                    Outcome.OUTSIDE_GROUND,
+                    c, (L.layer,), None, math.inf, False, Outcome.OUTSIDE_GROUND
                 )
-                for c in refs.layers
-                if c.plane is None
+                for L in refs.layers
+                if L.plane is None
             ]
         return out
 
@@ -314,7 +317,8 @@ def _void_edge(fill: BoolMap, near: BoolMap, centre: Pixel) -> BoolMap:
 def measure_returns(
     snapshot: Snapshot, ground_nets: Sequence[str] | None, distance: float
 ) -> list[PlaneReturn]:
-    """Return distance of every non-exempt signal via on each reference plane."""
+    """Return distance of every non-exempt signal via and PTH pad on each
+    reference plane."""
     fields = ReturnFields(snapshot)
     grounds = resolve_ground_nets(snapshot, ground_nets)
-    return fields.measure(via_references(snapshot, grounds), distance)
+    return fields.measure(change_references(snapshot, grounds), distance)

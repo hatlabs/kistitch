@@ -317,6 +317,106 @@ def test_exempt_via_is_not_measured():
     assert measure_returns(snap, None, DISTANCE) == []
 
 
+PAD_RADIUS = 0.6
+PAD_ANTIPAD = PAD_RADIUS + 0.2
+
+
+def signal_pad(pos=SIG, net="SIG", layers=("F.Cu", "B.Cu")):
+    """A PTH pad on every layer with tracks on `layers`."""
+    shapes = {L: Point(pos).buffer(PAD_RADIUS) for L in FOUR_LAYERS}
+    x, y = pos
+    tracks = [
+        Track(f"{net}:{L}@pad", net, L, 0.2, LineString([pos, (x + 3, y)]))
+        for L in layers
+    ]
+    p = Pad(f"pad:{net}@{pos}", None, net, PadKind.PTH, "1", pos, 1.0, shapes)
+    return p, tracks
+
+
+def pad_board(returns=(), layers=("F.Cu", "B.Cu"), zones=None, pads=()):
+    """A signal PTH pad at SIG over GND planes on In1 and In2."""
+    p, tracks = signal_pad(layers=layers)
+    if zones is None:
+        plain = BOARD.difference(holes((SIG, PAD_ANTIPAD)))
+        zones = [gnd_zone({L: plain for L in INNER})]
+    return Snapshot(
+        copper_layers=FOUR_LAYERS,
+        vias=[via(n, pos) for n, pos in returns],
+        tracks=tracks,
+        zones=zones,
+        pads=[p, *pads],
+        edge_paths=[[(0, 0), (40, 0), (40, 20), (0, 20), (0, 0)]],
+    )
+
+
+def test_signal_pth_pad_beyond_its_return_is_unserved_on_each_plane():
+    results = measure_returns(pad_board([("GND", polar(2.0, 0))]), None, DISTANCE)
+
+    assert sorted(r.plane.layer for r in results) == list(INNER)
+    for r in results:
+        assert r.position == SIG
+        assert r.net == "SIG"
+        assert r.change.id == signal_pad()[0].id
+        assert r.outcome is Outcome.MEASURED
+        assert not r.served
+
+
+def test_ground_pth_pad_within_the_distance_serves_a_signal_pth_pad():
+    pos = polar(1.4, 0)
+    gnd = Pad(
+        "gnd", None, "GND", PadKind.PTH, "2", pos, 0.4,
+        {L: Point(pos).buffer(0.3) for L in FOUR_LAYERS},
+    )  # fmt: skip
+
+    results = measure_returns(pad_board(pads=[gnd]), None, DISTANCE)
+
+    assert len(results) == len(INNER)
+    assert all(r.served for r in results)
+
+
+def test_signal_pth_pad_routed_on_one_layer_is_not_measured():
+    snap = pad_board([("GND", polar(2.0, 0))], layers=("F.Cu",))
+    assert measure_returns(snap, None, DISTANCE) == []
+
+
+def test_signal_pth_pad_outside_every_ground_zone_is_outside_ground():
+    far = box(20, 0, 40, 20)
+    snap = pad_board(zones=[gnd_zone({L: far for L in INNER}, outline=far)])
+
+    results = measure_returns(snap, ["GND"], DISTANCE)
+    assert [(r.layers, r.outcome) for r in results] == [
+        (("F.Cu",), Outcome.OUTSIDE_GROUND),
+        (("B.Cu",), Outcome.OUTSIDE_GROUND),
+    ]
+
+
+def test_signal_pth_pad_with_no_ground_fill_near_it_has_no_ground_fill():
+    far = box(15, 0, 20, 20)
+    snap = pad_board(zones=[gnd_zone({L: far for L in INNER})])
+
+    results = measure_returns(snap, ["GND"], DISTANCE)
+    assert len(results) == len(INNER)
+    assert all(r.outcome is Outcome.NO_GROUND_FILL for r in results)
+
+
+def test_via_and_pad_at_one_spot_are_measured_apart():
+    v, via_tracks = signal_via()
+    p, pad_tracks = signal_pad()
+    plain = BOARD.difference(holes((SIG, PAD_ANTIPAD)))
+    snap = Snapshot(
+        copper_layers=FOUR_LAYERS,
+        vias=[v],
+        pads=[p],
+        tracks=via_tracks + pad_tracks,
+        zones=[gnd_zone({L: plain for L in INNER})],
+        edge_paths=[[(0, 0), (40, 0), (40, 20), (0, 20), (0, 0)]],
+    )
+
+    results = measure_returns(snap, None, DISTANCE)
+    assert len(results) == 2 * len(INNER)
+    assert {r.change.id for r in results} == {v.id, p.id}
+
+
 def test_board_without_outline_raises_a_typed_error():
     with pytest.raises(NoBoardOutlineError):
         measure_returns(board([SIG], edge=False), None, DISTANCE)

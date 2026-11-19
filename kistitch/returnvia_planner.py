@@ -16,12 +16,13 @@ from kistitch.progress import NO_PROGRESS, Progress, Stage
 from kistitch.returnpath import Outcome, ReturnFields, served_within
 from kistitch.returnvia import (
     DISTANCE_EPSILON,
+    LayerChange,
     ReferencePlane,
     ReturnViaOptions,
+    change_references,
     resolve_ground_nets,
-    via_references,
 )
-from kistitch.snapshot import Point2, Snapshot, Via, ViaSize
+from kistitch.snapshot import Point2, Snapshot, ViaSize
 
 # Candidate rings around each unserved via.
 RING_STEP = 0.05
@@ -39,9 +40,10 @@ WOULD_OVERLAP = "every spot overlaps other-net copper"
 
 @dataclass(frozen=True)
 class Target:
-    """A signal via and the planes of one ground net where it is unserved."""
+    """A signal via or PTH pad and the planes of one ground net where it is
+    unserved."""
 
-    via: Via
+    change: LayerChange
     ground: str
     planes: tuple[ReferencePlane, ...]
 
@@ -76,7 +78,7 @@ def _radii(start: float, stop: float) -> list[float]:
 
 
 def _force_spot(
-    obstacles: Obstacles, v: Via, ground: str, size: ViaSize, distance: float
+    obstacles: Obstacles, v: LayerChange, ground: str, size: ViaSize, distance: float
 ) -> tuple[Point2, float] | None:
     """Spot with the most clearance to other-net copper, nearest first on ties.
 
@@ -84,7 +86,7 @@ def _force_spot(
     rule is met.
     """
     best: tuple[tuple[float, float], Point2, float] | None = None
-    start = v.diameter / 2 + size.diameter / 2
+    start = v.inscribed + size.diameter / 2
     for a in _angles(FORCE_RING_ANGLES):
         for r in _radii(start, distance - ROUNDING_MARGIN):
             pos = _ring_point(v.position, r, a)
@@ -120,7 +122,7 @@ class _Context:
         fields = ReturnFields(snapshot)
         targets: list[Target] = []
         unfixable: list[UnfixableSpot] = []
-        for refs in via_references(snapshot, grounds):
+        for refs in change_references(snapshot, grounds):
             progress.check()
             failing = [
                 r for r in fields.measure([refs], options.distance) if not r.served
@@ -137,10 +139,10 @@ class _Context:
                             r.position,
                             r.net,
                             r.reason,
-                            extent=refs.via.diameter / 2,
+                            extent=refs.change.circumscribed,
                         )
                     )
-            targets += [Target(refs.via, g, tuple(p)) for g, p in by_ground.items()]
+            targets += [Target(refs.change, g, tuple(p)) for g, p in by_ground.items()]
         return cls(
             snapshot,
             options,
@@ -174,7 +176,7 @@ class _Round:
             if not planes:
                 continue
             size = options.via or self.ctx.snapshot.via_size(t.ground)
-            pos, clear = self.find_spot(t.via, t.ground, planes, size)
+            pos, clear = self.find_spot(t.change, t.ground, planes, size)
             if pos is not None:
                 self.add(PlannedUnit(pos, t.ground, size))
             else:
@@ -190,7 +192,9 @@ class _Round:
                 x, y = stand_in.position
                 reason = RELIES_ON.format(x=x, y=y)
             elif options.force:
-                spot = _force_spot(self.obstacles, t.via, t.ground, size, self.distance)
+                spot = _force_spot(
+                    self.obstacles, t.change, t.ground, size, self.distance
+                )
                 if spot is not None and spot[1] > 0:
                     self.add(PlannedUnit(spot[0], t.ground, size, forced=True))
                     continue
@@ -198,11 +202,11 @@ class _Round:
             where = ", ".join(p.layer for p in planes)
             unfixable.append(
                 UnfixableSpot(
-                    t.via.position,
-                    t.via.net,
+                    t.change.position,
+                    t.change.net,
                     reason,
                     where,
-                    extent=t.via.diameter / 2,
+                    extent=t.change.circumscribed,
                 )
             )
 
@@ -213,7 +217,7 @@ class _Round:
         self.obstacles.add_unit(unit)
 
     def serves(
-        self, position: Point2, size: ViaSize, v: Via, plane: ReferencePlane
+        self, position: Point2, size: ViaSize, v: LayerChange, plane: ReferencePlane
     ) -> bool:
         found = self.ctx.fields.distance_from(
             position, size.diameter, v.position, plane, self.distance
@@ -232,12 +236,12 @@ class _Round:
             for u in self.units
             if u.net == t.ground
             and not u.forced
-            and math.dist(u.position, t.via.position) <= reach
+            and math.dist(u.position, t.change.position) <= reach
         ]
         return tuple(
             p
             for p in t.planes
-            if not any(self.serves(u.position, u.size, t.via, p) for u in near)
+            if not any(self.serves(u.position, u.size, t.change, p) for u in near)
         )
 
     def stand_in(self, t: Target) -> PlannedUnit | None:
@@ -251,21 +255,21 @@ class _Round:
                 for u in self.units
                 if u.forced
                 and u.net == t.ground
-                and math.dist(u.position, t.via.position) <= reach
+                and math.dist(u.position, t.change.position) <= reach
             ),
             None,
         )
 
     def find_spot(
         self,
-        v: Via,
+        v: LayerChange,
         ground: str,
         planes: Sequence[ReferencePlane],
         size: ViaSize,
     ) -> tuple[Point2 | None, bool]:
         """Nearest spot on rings around `v` with full clearance that serves
         every one of `planes`, and whether any spot had full clearance."""
-        start = v.diameter / 2 + size.diameter / 2 + OTHER_NET_CLEARANCE
+        start = v.inscribed + size.diameter / 2 + OTHER_NET_CLEARANCE
         stop = served_within(self.distance) - ROUNDING_MARGIN
         clear = False
         for r in _radii(start, stop):

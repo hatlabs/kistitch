@@ -6,14 +6,15 @@ through them is `returnpath`'s job, and planning by it `returnvia_planner`'s.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
+import shapely
 from loguru import logger
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 
-from kistitch.snapshot import Point2, Snapshot, Via, ViaSize
+from kistitch.snapshot import Pad, PadKind, Point2, Snapshot, Via, ViaSize
 
 DEFAULT_DISTANCE = 1.5
 FALLBACK_GROUND = "GND"
@@ -82,23 +83,83 @@ class ReferencePlane:
     ground: str
 
 
+@dataclass(frozen=True, eq=False)
+class LayerChange:
+    """A signal via or PTH pad: copper through the board, measured from
+    `position`, its centre.
+
+    `copper` is its copper per layer. `inscribed` and `circumscribed` are the
+    nearest and farthest reach of its outline from `position` on any layer.
+    """
+
+    id: str
+    net: str
+    position: Point2
+    copper: Mapping[str, BaseGeometry]
+    inscribed: float
+    circumscribed: float
+    # A via: `touches` tests its true circle, not the polygon in `copper`.
+    is_disc: bool = False
+
+    @classmethod
+    def of_via(cls, v: Via, layers: Iterable[str]) -> LayerChange:
+        """A via, its disc on each of `layers`."""
+        radius = v.diameter / 2
+        disc = Point(v.position).buffer(radius)
+        return cls(
+            v.id,
+            v.net,
+            v.position,
+            dict.fromkeys(layers, disc),
+            radius,
+            radius,
+            is_disc=True,
+        )
+
+    @classmethod
+    def of_pad(cls, p: Pad) -> LayerChange:
+        centre = Point(p.position)
+        shapes = list(p.shapes.values())
+        # A PTH pad's copper may carry its drill as a hole; the reach is to its rim.
+        rims = shapely.get_exterior_ring(shapely.get_parts(shapes))
+        return cls(
+            p.id,
+            p.net,
+            p.position,
+            p.shapes,
+            min(shapely.distance(centre, rims).tolist(), default=0.0),
+            max((centre.hausdorff_distance(s) for s in shapes), default=0.0),
+        )
+
+    def touches(self, layer: str, geometry: BaseGeometry, reach: float = 0.0) -> bool:
+        """Whether `geometry` lies within `reach` of the copper on `layer`."""
+        if layer not in self.copper or geometry.is_empty:
+            return False
+        if self.is_disc:
+            gap = geometry.distance(Point(self.position)) - self.inscribed
+        else:
+            gap = geometry.distance(self.copper[layer])
+        return gap <= reach + DISTANCE_EPSILON
+
+
 @dataclass(frozen=True)
 class LayerReference:
-    """A layer a via connects on; `plane` None means outside every ground zone."""
+    """A layer a via or pad connects on; `plane` None means outside every
+    ground zone."""
 
     layer: str
     plane: ReferencePlane | None
 
 
 @dataclass(frozen=True)
-class ViaReferences:
-    via: Via
+class ChangeReferences:
+    change: LayerChange
     # In stack order.
     layers: tuple[LayerReference, ...]
 
     @property
     def exempt(self) -> bool:
-        """A via connecting on fewer than two layers carries no layer change."""
+        """Copper connecting on fewer than two layers carries no layer change."""
         return len(self.layers) < MIN_CONNECTED_LAYERS
 
     @property
@@ -107,18 +168,35 @@ class ViaReferences:
         return tuple(dict.fromkeys(c.plane for c in self.layers if c.plane))
 
 
-def via_references(snapshot: Snapshot, grounds: Sequence[str]) -> list[ViaReferences]:
-    """Connected layers and their reference planes for every non-ground via."""
+def layer_changes(snapshot: Snapshot, grounds: Sequence[str]) -> list[LayerChange]:
+    """Every via and PTH pad on a non-ground net, by position."""
+    vias = [
+        LayerChange.of_via(v, snapshot.copper_layers)
+        for v in snapshot.vias
+        if v.net and v.net not in grounds
+    ]
+    pads = [
+        LayerChange.of_pad(p)
+        for p in snapshot.pads
+        if p.kind is PadKind.PTH and p.net and p.net not in grounds
+    ]
+    return sorted(vias + pads, key=lambda c: c.position)
+
+
+def change_references(
+    snapshot: Snapshot, grounds: Sequence[str]
+) -> list[ChangeReferences]:
+    """Connected layers and their reference planes for every non-ground via
+    and PTH pad."""
     return [
-        ViaReferences(
-            v,
+        ChangeReferences(
+            c,
             tuple(
-                LayerReference(L, _reference_plane(snapshot, v.position, L, grounds))
-                for L in _connected_layers(snapshot, v)
+                LayerReference(L, _reference_plane(snapshot, c.position, L, grounds))
+                for L in _connected_layers(snapshot, c)
             ),
         )
-        for v in sorted(snapshot.vias, key=lambda v: v.position)
-        if v.net and v.net not in grounds
+        for c in layer_changes(snapshot, grounds)
     ]
 
 
@@ -162,36 +240,28 @@ def _reference_plane(
     )
 
 
-def _touches(v: Via, geometry: BaseGeometry, reach: float = 0.0) -> bool:
-    return (
-        not geometry.is_empty
-        and geometry.distance(Point(v.position))
-        <= v.diameter / 2 + reach + DISTANCE_EPSILON
-    )
-
-
-def tied_layers(snapshot: Snapshot, v: Via) -> set[str]:
-    """Layers where a same-net track or pad touches the via."""
+def tied_layers(snapshot: Snapshot, c: LayerChange) -> set[str]:
+    """Layers where a same-net track or another same-net pad touches `c`."""
     layers = {
         t.layer
         for t in snapshot.tracks
-        if t.net == v.net and _touches(v, t.centreline, t.width / 2)
+        if t.net == c.net and c.touches(t.layer, t.centreline, t.width / 2)
     }
     return layers | {
         L
         for p in snapshot.pads
-        if p.net == v.net
+        if p.net == c.net and p.id != c.id
         for L, shape in p.shapes.items()
-        if _touches(v, shape)
+        if c.touches(L, shape)
     }
 
 
-def filled_layers(snapshot: Snapshot, v: Via) -> set[str]:
-    """Layers where a fill of the via's own net touches it."""
-    return {L for L in snapshot.copper_layers if _touches(v, snapshot.fill(v.net, L))}
+def filled_layers(snapshot: Snapshot, c: LayerChange) -> set[str]:
+    """Layers where a fill of `c`'s own net touches it."""
+    return {L for L in c.copper if c.touches(L, snapshot.fill(c.net, L))}
 
 
-def _connected_layers(snapshot: Snapshot, v: Via) -> list[str]:
-    """Layers where same-net copper (track, pad or fill) touches the via."""
-    layers = tied_layers(snapshot, v) | filled_layers(snapshot, v)
+def _connected_layers(snapshot: Snapshot, c: LayerChange) -> list[str]:
+    """Layers where same-net copper (track, pad or fill) touches `c`."""
+    layers = tied_layers(snapshot, c) | filled_layers(snapshot, c)
     return [L for L in snapshot.copper_layers if L in layers]

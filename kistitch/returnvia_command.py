@@ -32,11 +32,11 @@ from kistitch.returnpath import (
     ReturnFields,
 )
 from kistitch.returnvia import (
+    ChangeReferences,
     ReferencePlane,
     ReturnViaOptions,
-    ViaReferences,
+    change_references,
     reference_outlines,
-    via_references,
 )
 from kistitch.returnvia_planner import ReturnViaPlanner
 from kistitch.snapshot import PadKind, Snapshot, Via
@@ -145,7 +145,7 @@ def copper_map(fields: ReturnFields, layer: str, grounds: Sequence[str]) -> Cove
 
 
 def copper_maps(
-    fields: ReturnFields, references: Sequence[ViaReferences], grounds: Sequence[str]
+    fields: ReturnFields, references: Sequence[ChangeReferences], grounds: Sequence[str]
 ) -> list[CoverageMap]:
     """One map per copper layer a non-exempt via end connects on."""
     layers = {c.layer for r in references if not r.exempt for c in r.layers}
@@ -176,14 +176,12 @@ def via_ends(
     results: Sequence[PlaneReturn], fields: ReturnFields, distance: float, shown: Shown
 ) -> list[End]:
     """The measured via ends, each on the layers referencing its plane."""
-    diameters = {(v.position, v.net): v.diameter for v in fields.snapshot.vias}
     out = []
     for r in results:
         if r.outcome is not Outcome.MEASURED:
             continue
         assert r.plane is not None
-        via = Point(r.position).buffer(diameters[(r.position, r.net)] / 2)
-        copper = {L: via for L in r.layers}
+        copper = {L: r.change.copper[L] for L in r.layers}
         if shown is not None and not shown(copper):
             continue
         void = fields.void(r.position, r.plane, distance)
@@ -349,7 +347,7 @@ class ReturnResult:
 
 
 def log_results(
-    references: Sequence[ViaReferences],
+    references: Sequence[ChangeReferences],
     results: Sequence[PlaneReturn],
     distance: float,
 ) -> tuple[int, int]:
@@ -432,7 +430,7 @@ def execute(
     after.enter(Stage.MEASURE)
     grounds = planner.grounds(snapshot, options)
     fields = ReturnFields(with_returns(snapshot, plan.units))
-    references = via_references(fields.snapshot, grounds)
+    references = change_references(fields.snapshot, grounds)
     results = fields.measure(references, options.distance)
     logger.info(f"{COMMAND} returns" + (" (check only)" if check else ""))
     unserved, total = log_results(references, results, options.distance)

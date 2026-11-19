@@ -36,7 +36,12 @@ from kistitch.returnpath import (
     ReturnFields,
     measure_returns,
 )
-from kistitch.returnvia import NoGroundNetsError, ReferencePlane, ReturnViaOptions
+from kistitch.returnvia import (
+    LayerChange,
+    NoGroundNetsError,
+    ReferencePlane,
+    ReturnViaOptions,
+)
 from kistitch.snapshot import (
     NM_PER_MM,
     Pad,
@@ -1379,13 +1384,21 @@ def test_placing_run_overlay_leaves_the_markers_to_the_placement(fakes):
 
 
 def test_unserved_markers_put_one_circle_at_each_via_with_an_unserved_end():
+    both_unserved, one_unserved, served = (0, 0), (5, 0), (10, 0)
+    vias = [
+        Via(f"v{i}", "SIG", p, diameter, 0.3)
+        for i, (p, diameter) in enumerate(
+            [(both_unserved, 0.8), (one_unserved, 0.6), (served, 0.6)]
+        )
+    ]
+    changes = {v.position: LayerChange.of_via(v, ("F.Cu", "B.Cu")) for v in vias}
+
     def end(position, layer, served):
         plane = ReferencePlane("In1.Cu" if layer == "F.Cu" else "In2.Cu", "GND")
         return PlaneReturn(
-            position, "SIG", (layer,), plane, 1.0, served, Outcome.MEASURED
+            changes[position], (layer,), plane, 1.0, served, Outcome.MEASURED
         )
 
-    both_unserved, one_unserved, served = (0, 0), (5, 0), (10, 0)
     results = [
         end(both_unserved, "F.Cu", False),
         end(both_unserved, "B.Cu", False),
@@ -1393,13 +1406,6 @@ def test_unserved_markers_put_one_circle_at_each_via_with_an_unserved_end():
         end(one_unserved, "B.Cu", False),
         end(served, "F.Cu", True),
         end(served, "B.Cu", True),
-    ]
-
-    vias = [
-        Via(f"v{i}", "SIG", p, diameter, 0.3)
-        for i, (p, diameter) in enumerate(
-            [(both_unserved, 0.8), (one_unserved, 0.6), (served, 0.6)]
-        )
     ]
 
     assert returnvia_command.unserved_markers(results, vias) == (
