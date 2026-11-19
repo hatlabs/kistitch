@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 
 import pytest
 from shapely.geometry import LineString, Point, Polygon, box
@@ -6,11 +7,17 @@ from shapely.ops import unary_union
 
 from kistitch import drc
 from kistitch.placement import markers_for
+from kistitch.plan import QUANTISATION
 from kistitch.progress import Cancelled, Progress, Stage
 from kistitch.returnpath import Outcome, measure_returns
 from kistitch.returnvia import ReturnViaOptions
 from kistitch.returnvia_command import with_returns
-from kistitch.returnvia_planner import ReturnViaPlanner
+from kistitch.returnvia_planner import (
+    NO_ROOM,
+    RELIES_ON,
+    WOULD_OVERLAP,
+    ReturnViaPlanner,
+)
 from kistitch.snapshot import Pad, PadKind, Snapshot, Track, Via, ViaSize, Zone
 
 FOUR_LAYERS = ("F.Cu", "In1.Cu", "In2.Cu", "B.Cu")
@@ -463,3 +470,237 @@ def test_measuring_the_targets_stops_on_request():
     with pytest.raises(Cancelled):
         ReturnViaPlanner(progress)(snap, ReturnViaOptions(), [])
     assert Stage.PLAN not in stages
+
+
+# ---- signal PTH pads -------------------------------------------------------------
+
+PIN_RADIUS = 0.85
+PIN_DRILL = 1.0
+PIN_ANTIPAD_GAP = 0.2
+PITCH = 2.54
+# Other-net F.Cu tracks along a row, a clearance off its 1.7 mm pads.
+ROW_TRACK_OFFSET = 1.25
+
+
+def pin(pos, net="SIG", shape=None):
+    """A PTH header pin, `shape` (default a 1.7 mm disc) on every layer."""
+    copper = shape if shape is not None else Point(pos).buffer(PIN_RADIUS)
+    return Pad(
+        f"{net}@{pos}",
+        None,
+        net,
+        PadKind.PTH,
+        "1",
+        pos,
+        PIN_DRILL,
+        dict.fromkeys(FOUR_LAYERS, copper),
+    )
+
+
+def square(pos, half=PIN_RADIUS):
+    x, y = pos
+    return box(x - half, y - half, x + half, y + half)
+
+
+def pin_board(pins, signals=(), others=(), tracks=()):
+    """`pins` routed on F.Cu and B.Cu, beside signal vias at `signals` and
+    unrouted `others`; the GND planes clear every non-ground pin."""
+    ties = [
+        Track(
+            f"{p.id}:{L}",
+            p.net,
+            L,
+            0.2,
+            LineString([p.position, (p.position[0] - 0.1, p.position[1])]),
+        )
+        for p in pins
+        for L in ("F.Cu", "B.Cu")
+    ]
+    antipads = unary_union(
+        [
+            p.shapes["In1.Cu"].buffer(PIN_ANTIPAD_GAP)
+            for p in (*pins, *others)
+            if p.kind is PadKind.PTH and p.net != "GND"
+        ]
+    )
+    fills = dict.fromkeys(INNER, flush(*signals).difference(antipads))
+    return board(
+        list(signals), fills=fills, pads=[*pins, *others], tracks=[*ties, *tracks]
+    )
+
+
+def test_unserved_header_pin_gets_a_return_the_check_counts():
+    snap = pin_board([pin(SIG)])
+    assert unserved(measure_returns(snap, None, DISTANCE)) == {SIG}
+
+    result = plan(snap)
+
+    (u,) = result.units
+    assert not u.forced
+    assert math.dist(u.position, SIG) <= DISTANCE + QUANTISATION
+    assert not result.unfixable
+    assert not unserved(check(snap, result))
+
+
+def test_fine_pitch_pin_beside_a_ground_pin_needs_no_return():
+    small = 0.5
+    sig = pin(SIG, shape=Point(SIG).buffer(small))
+    gnd_at = (SIG[0] + 1.27, SIG[1])
+    gnd = pin(gnd_at, net="GND", shape=Point(gnd_at).buffer(small))
+    snap = pin_board([sig], others=[gnd])
+
+    result = plan(snap)
+
+    assert not result.units and not result.unfixable
+
+
+def test_return_lands_beside_the_long_side_of_a_rectangular_pad():
+    # Its corners reach 1.6 mm: rings starting there would start past reach.
+    half_w, half_h = 1.5, 0.6
+    x, y = SIG
+    rect = box(x - half_w, y - half_h, x + half_w, y + half_h)
+    snap = pin_board([pin(SIG, shape=rect)])
+
+    result = plan(snap)
+
+    (u,) = result.units
+    assert abs(u.position[0] - x) < half_w
+    assert not unserved(check(snap, result))
+
+
+def test_one_return_serves_two_adjacent_pins():
+    a, b = SIG, (SIG[0] + PITCH, SIG[1])
+    snap = pin_board([pin(a), pin(b, net="SIG2")])
+
+    result = plan(snap)
+
+    assert len(result.units) == 1
+    assert not unserved(check(snap, result))
+
+
+def test_pin_and_nearby_via_share_one_return():
+    via_at = (SIG[0] + 2.2, SIG[1])
+    snap = pin_board([pin(SIG)], signals=[via_at])
+
+    result = plan(snap)
+
+    assert len(result.units) == 1
+    assert not unserved(check(snap, result))
+
+
+def row_parts(offsets=(-PITCH, 0.0, PITCH), measured=(0.0,)):
+    """A row of pins between other-net tracks, by x offset from SIG: a
+    square pin at 0 and round pins elsewhere. Pins at the offsets in
+    `measured` are routed, the rest are not; as `pin_board`'s pins, others
+    and tracks. With 2.54 mm neighbours no spot near the square pin is
+    clear."""
+    x, y = SIG
+    pins, others = [], []
+    for i, dx in enumerate(offsets):
+        pos = (x + dx, y)
+        p = pin(pos, net=f"P{i}", shape=square(pos) if dx == 0 else None)
+        (pins if dx in measured else others).append(p)
+    tracks = [
+        Track(
+            f"X{dy}", "X", "F.Cu", 0.2, LineString([(x - 6, y + dy), (x + 8, y + dy)])
+        )
+        for dy in (-ROW_TRACK_OFFSET, ROW_TRACK_OFFSET)
+    ]
+    return pins, others, tracks
+
+
+def row(**kwargs):
+    pins, others, tracks = row_parts(**kwargs)
+    return pin_board(pins, others=others, tracks=tracks)
+
+
+def test_blocked_pin_is_unfixable_with_a_marker_enclosing_it():
+    snap = row()
+
+    result = plan(snap)
+
+    assert not result.units
+    (s,) = result.unfixable
+    assert (s.position, s.net, s.reason) == (SIG, "P1", NO_ROOM)
+    assert s.extent == pytest.approx(math.hypot(PIN_RADIUS, PIN_RADIUS))
+    assert unserved(check(snap, result)) == {SIG}
+
+
+def test_force_places_a_blocked_pins_via_at_maximum_clearance():
+    snap = row()
+
+    result = plan(snap, force=True)
+
+    (u,) = result.units
+    assert u.forced
+    assert math.dist(u.position, SIG) <= DISTANCE
+    # The roomiest spot within reach leaves 0.2 mm, beside the square pin's
+    # corner at the edge of reach; the 5 degree rings come within 0.04 mm.
+    copper = [p.shapes["F.Cu"] for p in snap.pads] + [
+        t.centreline.buffer(t.width / 2) for t in snap.tracks if t.net == "X"
+    ]
+    gap = min(Point(u.position).buffer(VIA_RADIUS).distance(c) for c in copper)
+    assert gap == pytest.approx(0.2, abs=0.04)
+    assert not result.unfixable
+
+
+def test_forced_via_of_one_pin_stands_in_for_its_neighbour():
+    # A tight west neighbour leaves the square pin room only to the east,
+    # toward the next routed pin.
+    snap = row(offsets=(-2.0, 0.0, PITCH, 2 * PITCH), measured=(0.0, PITCH))
+
+    result = plan(snap, force=True)
+
+    (u,) = result.units
+    assert u.forced
+    x, y = u.position
+    east = (SIG[0] + PITCH, SIG[1])
+    assert [(s.position, s.reason) for s in result.unfixable] == [
+        (east, RELIES_ON.format(x=x, y=y))
+    ]
+
+
+def test_force_reports_a_pin_whose_every_spot_overlaps_other_net_copper():
+    # Other-net copper fills the plane's antipad gap around the pin.
+    gap_edge = PIN_RADIUS + PIN_ANTIPAD_GAP
+    blanket = other_net_copper(
+        box(4, 4, 16, 16).difference(Point(SIG).buffer(gap_edge))
+    )
+    snap = pin_board([pin(SIG)], others=[blanket])
+
+    result = plan(snap, force=True)
+
+    assert not result.units
+    (s,) = result.unfixable
+    assert s.reason == WOULD_OVERLAP
+    assert s.extent == pytest.approx(PIN_RADIUS, rel=0.01)
+
+
+def test_pin_outside_every_ground_zone_marks_the_whole_pad():
+    outside = (35.0, 10.0)
+    snap = pin_board([pin(outside)])
+    snap = replace(
+        snap, zones=[gnd_zone(dict.fromkeys(INNER, flush()), outline=box(0, 0, 20, 20))]
+    )
+
+    result = plan(snap, force=True)
+
+    assert not result.units
+    assert result.unfixable
+    for s in result.unfixable:
+        assert s.position == outside
+        assert s.extent == pytest.approx(PIN_RADIUS, rel=0.01)
+
+
+def test_planned_run_leaves_only_the_unfixable_pins_unserved():
+    rect_at = (30.0, 15.0)
+    rect = box(rect_at[0] - 1.5, rect_at[1] - 0.6, rect_at[0] + 1.5, rect_at[1] + 0.6)
+    pins, others, tracks = row_parts()
+    pins += [pin((30.0, 5.0), net="A"), pin(rect_at, net="B", shape=rect)]
+    snap = pin_board(pins, others=others, tracks=tracks)
+
+    result = plan(snap)
+
+    assert {s.position for s in result.unfixable} == {SIG}
+    assert len(result.units) == 2
+    assert unserved(check(snap, result)) == {SIG}
