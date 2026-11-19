@@ -654,9 +654,10 @@ def test_force_places_a_blocked_pins_via_at_maximum_clearance():
 
     (u,) = result.units
     assert u.forced
-    assert math.dist(u.position, SIG) <= DISTANCE
-    # The roomiest spot within reach leaves 0.2 mm, beside the square pin's
-    # corner at the edge of reach; the 5 degree rings come within 0.04 mm.
+    # Force reaches a drill wall within the distance of the pin's.
+    assert math.dist(u.position, SIG) - (PIN_DRILL + u.size.drill) / 2 <= DISTANCE
+    # The roomiest spot within reach leaves 0.2 mm, between the square pin's
+    # corner and a track; the 5 degree rings come within 0.04 mm.
     copper = [p.shapes["F.Cu"] for p in snap.pads] + [
         t.centreline.buffer(t.width / 2) for t in snap.tracks if t.net == "X"
     ]
