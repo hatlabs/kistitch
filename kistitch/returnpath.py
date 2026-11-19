@@ -88,11 +88,15 @@ class PlaneReturn:
 
     @property
     def reason(self) -> str | None:
-        """Why the via can't be served on this plane, if no return via can fix it."""
+        """Why the via or pad can't be served on this plane, if no return via
+        can fix it."""
         match self.outcome:
             case Outcome.NO_GROUND_FILL:
                 assert self.plane is not None
-                return f"no {self.plane.ground} fill at the via on {self.plane.layer}"
+                kind = "via" if self.change.is_disc else "pad"
+                return (
+                    f"no {self.plane.ground} fill at the {kind} on {self.plane.layer}"
+                )
             case Outcome.OUTSIDE_GROUND:
                 return f"{OUTSIDE_GROUND} for {self.layers[0]}"
         return None

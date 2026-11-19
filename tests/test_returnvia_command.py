@@ -703,11 +703,14 @@ def test_signal_pth_pad_shows_its_distance_over_its_clearance_hole(fakes):
     snap = snapshot(
         returns=[("GND", (13.5, 5.0))], zones=[gnd_zone({L: plain for L in INNER})]
     )
-    pin = Point(PIN).buffer(PIN_RADIUS)
-    pad = Pad("p", None, "SIG", PadKind.PTH, "1", PIN, 0.8, {"F.Cu": pin})
-    lead = Track("lead", "SIG", "F.Cu", 0.2, LineString([PIN, (9.0, 5.0)]))
+    pin = {L: Point(PIN).buffer(PIN_RADIUS) for L in ("F.Cu", "B.Cu")}
+    pad = Pad("p", None, "SIG", PadKind.PTH, "1", PIN, 0.8, pin)
+    leads = [
+        Track(f"lead:{L}", "SIG", L, 0.2, LineString([PIN, (9.0, 5.0)]))
+        for L in ("F.Cu", "B.Cu")
+    ]
     snap.pads = [pad]
-    snap.tracks = [*snap.tracks, lead]
+    snap.tracks = [*snap.tracks, *leads]
     fakes.snap = snap
 
     run(Board(), overlay=True, full_map=True)
@@ -766,6 +769,78 @@ def test_netless_pth_pad_is_not_painted_as_an_end(fakes):
     assert at(rgba(fakes, "F.Cu"), PIN) == colour(STYLE.unreachable_colour)
 
 
+def pin_snapshot(shape=None, leads=("F.Cu", "B.Cu"), signals=(), returns=()):
+    """A signal PTH pin at PIN, with a lead on each of `leads`, in a clearance
+    hole in both planes; and signal vias as `snapshot` gives them."""
+    shape = shape or Point(PIN).buffer(PIN_RADIUS)
+    holes = unary_union([antipads(*signals), Point(PIN).buffer(PIN_HOLE)])
+    plain = BOARD.difference(holes)
+    snap = snapshot(
+        signals=signals, returns=returns, zones=[gnd_zone({L: plain for L in INNER})]
+    )
+    shapes = {L: shape for L in ("F.Cu", "B.Cu")}
+    snap.pads = [Pad("p", None, "SIG", PadKind.PTH, "1", PIN, 0.8, shapes)]
+    snap.tracks = [
+        *snap.tracks,
+        *(
+            Track(f"lead:{L}", "SIG", L, 0.2, LineString([PIN, (PIN[0] + 3, PIN[1])]))
+            for L in leads
+        ),
+    ]
+    return snap
+
+
+def test_board_whose_only_layer_change_is_a_pad_gets_maps(fakes, log):
+    fakes.snap = pin_snapshot()
+
+    run(Board(), overlay=True, full_map=True)
+
+    images = sorted(i.layer for i in fakes.created if i.layer in USER)
+    assert images == [BL.BL_User_1, BL.BL_User_4]
+    assert not [m for m in log if "no heatmaps" in m]
+
+
+def test_unserved_pad_is_ringed_on_its_connected_layers_and_counted(fakes):
+    fakes.snap = pin_snapshot()
+
+    result = run(Board(), overlay=True, full_map=True)
+
+    off_copper = (PIN[0], PIN[1] - DISTANCE)
+    assert at(rgba(fakes, "F.Cu"), off_copper) == RING
+    assert at(rgba(fakes, "B.Cu"), off_copper) == RING
+    assert (result.unserved, result.total) == (1, 1)
+
+
+def test_exempt_signal_pth_pad_reads_its_planes_field(fakes):
+    # Connected on F.Cu only: no layer change, so no end to paint. Its copper
+    # lies in the plane's clearance hole, which the field doesn't reach.
+    fakes.snap = pin_snapshot(
+        leads=("F.Cu",), signals=(SIG,), returns=[("GND", (6.0, 5.0))]
+    )
+
+    result = run(Board(), overlay=True, full_map=True)
+
+    assert at(rgba(fakes, "F.Cu"), PIN) == colour(STYLE.unreachable_colour)
+    assert (result.unserved, result.total) == (0, 1)
+
+
+def test_pads_are_counted_in_the_log(fakes, info_log):
+    # The via is served; the two-layer pin is not; a pin with no lead is exempt.
+    snap = pin_snapshot(signals=(SIG,), returns=[("GND", (6.0, 5.0))])
+    lone = (16.0, 8.0)
+    lone_shape = {"F.Cu": Point(lone).buffer(PIN_RADIUS)}
+    snap.pads = [
+        *snap.pads,
+        Pad("q", None, "SIG", PadKind.PTH, "2", lone, 0.8, lone_shape),
+    ]
+    fakes.snap = snap
+
+    run(Board())
+
+    assert any("1 vias and pads exempt" in m for m in info_log)
+    assert any("1 of 2 vias and pads unserved" in m for m in info_log)
+
+
 def test_via_shows_only_on_layers_where_it_has_a_measured_end(fakes):
     # SIG2 connects on F.Cu and In2.Cu; it passes B.Cu without copper there.
     sig2 = (15.0, 5.0)
@@ -797,7 +872,10 @@ def test_check_logs_each_unserved_via_plane_and_commits_nothing(fakes, log):
     assert "SIG at (5.000, 5.000) on In1.Cu (GND):" in line
     distance = float(line.rsplit(":", 1)[1].split()[0])
     assert distance > 2 * DISTANCE
-    assert any("1 of 1 vias unserved" in m and "1 of 2 via-plane" in m for m in log)
+    assert any(
+        "1 of 1 vias and pads unserved" in m and "1 of 2 plane returns" in m
+        for m in log
+    )
 
 
 def test_check_returns_the_unserved_and_total_vias_it_logs(fakes, log):
@@ -805,7 +883,7 @@ def test_check_returns_the_unserved_and_total_vias_it_logs(fakes, log):
 
     result = run(Board(), overlay=True)
 
-    assert any("1 of 1 vias unserved within" in m for m in log)
+    assert any("1 of 1 vias and pads unserved within" in m for m in log)
     assert (result.unserved, result.total) == (1, 1)
     assert result.distance == DISTANCE
     assert result.placement is None
@@ -891,8 +969,8 @@ def test_unserved_lines_are_debug_and_the_summary_info(fakes, log, info_log):
 
     assert [m for m in log if "unserved:" in m]
     assert not [m for m in info_log if "unserved:" in m]
-    assert any("1 vias exempt" in m for m in info_log)
-    assert any("1 of 1 vias unserved" in m for m in info_log)
+    assert any("1 vias and pads exempt" in m for m in info_log)
+    assert any("1 of 1 vias and pads unserved" in m for m in info_log)
 
 
 def test_no_ground_fill_line_is_debug(fakes, log, info_log):
@@ -932,7 +1010,7 @@ def test_layer_outside_every_ground_zone_is_logged_and_counted(fakes, log):
 
     (line,) = [m for m in log if "unserved:" in m]
     assert line.rstrip().endswith("outside every ground zone for F.Cu")
-    assert any("1 of 1 vias unserved" in m for m in log)
+    assert any("1 of 1 vias and pads unserved" in m for m in log)
     # Only the F.Cu end is unserved: B.Cu references F.Cu's ground.
     off_copper = (SIG[0], SIG[1] - DISTANCE)
     assert at(rgba(fakes, "F.Cu"), off_copper) == RING
@@ -947,7 +1025,7 @@ def test_every_via_served_logs_zero_and_draws_no_ring(fakes, log):
     run(Board(), overlay=True, full_map=True)
 
     assert not [m for m in log if "unserved:" in m]
-    assert any("0 of 1 vias unserved" in m for m in log)
+    assert any("0 of 1 vias and pads unserved" in m for m in log)
     for name in ("F.Cu", "B.Cu"):
         assert not (rgba(fakes, name) == RING).all(axis=2).any()
 
@@ -973,7 +1051,7 @@ def test_exempt_vias_are_counted(fakes, log):
 
     run(Board())
 
-    assert any("1 vias exempt" in m for m in log)
+    assert any("1 vias and pads exempt" in m for m in log)
 
 
 def test_split_plane_composites_both_ground_nets(fakes):
@@ -1065,7 +1143,7 @@ def test_dry_run_overlay_shows_the_planned_vias(fakes, log):
         "begin_commit",
         ("push_commit", returnvia_command.OVERLAY_COMMIT),
     ]
-    assert any("0 of 1 vias unserved" in m for m in log)
+    assert any("0 of 1 vias and pads unserved" in m for m in log)
     assert fakes.created
     image = rgba(fakes, "F.Cu")
     # Without the planned via no copper reaches a return at all.
@@ -1081,7 +1159,7 @@ def test_forced_vias_serve_nothing(fakes, log):
 
     run(Board(), check=False, dry_run=True)
 
-    assert any("1 of 1 vias unserved" in m for m in log)
+    assert any("1 of 1 vias and pads unserved" in m for m in log)
 
 
 MISSPELLED_GROUNDS = ("GND", "GDN")
@@ -1295,6 +1373,21 @@ def test_no_ground_fill_end_is_logged_and_ringed(fakes, log):
     assert at(rgba(fakes, "B.Cu"), off_copper) != RING
 
 
+def test_no_ground_fill_at_a_pad_names_the_pad(fakes, log):
+    snap = pin_snapshot()
+    far = box(16, 0, 20, 10)
+    flush = snap.zones[0].fills["In2.Cu"]
+    snap.zones = [gnd_zone({"In1.Cu": far, "In2.Cu": flush})]
+    fakes.snap = snap
+
+    run(Board())
+
+    (line,) = [m for m in log if "unserved:" in m and "fill" in m]
+    assert line.rstrip().endswith(
+        "SIG at (12.000, 5.000): no GND fill at the pad on In1.Cu"
+    )
+
+
 def test_render_creates_the_missing_parent_directory(fakes, tmp_path: Path):
     fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
     path = tmp_path / "out" / "heat.png"
@@ -1333,6 +1426,17 @@ def test_check_overlay_replaces_markers_with_a_circle_per_unserved_end(fakes):
     image_layers = {i.layer for i in fakes.created if i.layer in USER}
     assert image_layers
     assert set(board.visible) == {BL.BL_F_Cu, BL.BL_Eco2_User, *image_layers}
+
+
+def test_check_overlay_circle_encloses_an_unserved_pad(fakes):
+    rect = box(PIN[0] - 0.6, PIN[1] - 0.4, PIN[0] + 0.6, PIN[1] + 0.4)
+    fakes.snap = pin_snapshot(rect)
+
+    run(Board(), overlay=True)
+
+    corner = Point(PIN).distance(Point(PIN[0] + 0.6, PIN[1] + 0.4))
+    expected = marker_items([Marker(PIN, MarkerKind.UNFIXABLE, extent=corner)])
+    assert eco2_created(fakes) == [i.proto for i in expected]
 
 
 def test_check_overlay_with_every_end_served_only_removes_markers(fakes):
@@ -1383,7 +1487,7 @@ def test_placing_run_overlay_leaves_the_markers_to_the_placement(fakes):
     assert eco2_created(fakes) == []
 
 
-def test_unserved_markers_put_one_circle_at_each_via_with_an_unserved_end():
+def test_unserved_markers_put_one_circle_at_each_via_or_pad_with_an_unserved_end():
     both_unserved, one_unserved, served = (0, 0), (5, 0), (10, 0)
     vias = [
         Via(f"v{i}", "SIG", p, diameter, 0.3)
@@ -1392,25 +1496,33 @@ def test_unserved_markers_put_one_circle_at_each_via_with_an_unserved_end():
         )
     ]
     changes = {v.position: LayerChange.of_via(v, ("F.Cu", "B.Cu")) for v in vias}
+    # A pin of the same net under the first via: its own object, its own circle.
+    rect = box(-0.6, -0.4, 0.6, 0.4)
+    shapes = {"F.Cu": rect, "B.Cu": rect}
+    pin = LayerChange.of_pad(
+        Pad("p", None, "SIG", PadKind.PTH, "1", both_unserved, 0.8, shapes)
+    )
 
-    def end(position, layer, served):
+    def end(change, layer, served):
         plane = ReferencePlane("In1.Cu" if layer == "F.Cu" else "In2.Cu", "GND")
-        return PlaneReturn(
-            changes[position], (layer,), plane, 1.0, served, Outcome.MEASURED
-        )
+        return PlaneReturn(change, (layer,), plane, 1.0, served, Outcome.MEASURED)
 
     results = [
-        end(both_unserved, "F.Cu", False),
-        end(both_unserved, "B.Cu", False),
-        end(one_unserved, "F.Cu", True),
-        end(one_unserved, "B.Cu", False),
-        end(served, "F.Cu", True),
-        end(served, "B.Cu", True),
+        end(changes[both_unserved], "F.Cu", False),
+        end(changes[both_unserved], "B.Cu", False),
+        end(changes[one_unserved], "F.Cu", True),
+        end(changes[one_unserved], "B.Cu", False),
+        end(changes[served], "F.Cu", True),
+        end(changes[served], "B.Cu", True),
+        end(pin, "F.Cu", False),
     ]
 
-    assert returnvia_command.unserved_markers(results, vias) == (
+    assert returnvia_command.unserved_markers(results) == (
         Marker(both_unserved, MarkerKind.UNFIXABLE, extent=0.4),
         Marker(one_unserved, MarkerKind.UNFIXABLE, extent=0.3),
+        Marker(
+            both_unserved, MarkerKind.UNFIXABLE, extent=pytest.approx(0.721, abs=1e-3)
+        ),
     )
 
 
