@@ -1,5 +1,6 @@
 """The `returnvia` command: plan, verify and commit, then measure, render
-and overlay the return distance under the copper of each via end layer."""
+and overlay the return distance under the copper of each via or pad end
+layer."""
 
 from __future__ import annotations
 

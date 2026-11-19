@@ -51,7 +51,7 @@ Entries = tuple[npt.NDArray[np.intp], npt.NDArray[np.intp], FloatMap]
 
 
 def served_within(distance: float) -> float:
-    """The largest return distance that serves a via end."""
+    """The largest return distance that serves a via or pad end."""
     return distance + QUANTISATION
 
 

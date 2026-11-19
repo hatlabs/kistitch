@@ -24,7 +24,7 @@ from kistitch.returnvia import (
 )
 from kistitch.snapshot import Point2, Snapshot, ViaSize
 
-# Candidate rings around each unserved via.
+# Candidate rings around each unserved via or pad.
 RING_STEP = 0.05
 RING_ANGLES = 36
 FORCE_RING_ANGLES = 72
@@ -78,7 +78,7 @@ def _radii(start: float, stop: float) -> list[float]:
 
 
 def _force_spot(
-    obstacles: Obstacles, v: LayerChange, ground: str, size: ViaSize, distance: float
+    obstacles: Obstacles, c: LayerChange, ground: str, size: ViaSize, distance: float
 ) -> tuple[Point2, float] | None:
     """Spot with the most clearance to other-net copper, nearest first on ties.
 
@@ -86,10 +86,10 @@ def _force_spot(
     rule is met.
     """
     best: tuple[tuple[float, float], Point2, float] | None = None
-    start = v.inscribed + size.diameter / 2
+    start = c.inscribed + size.diameter / 2
     for a in _angles(FORCE_RING_ANGLES):
         for r in _radii(start, distance - ROUNDING_MARGIN):
-            pos = _ring_point(v.position, r, a)
+            pos = _ring_point(c.position, r, a)
             if not (
                 obstacles.in_bounds(pos, size)
                 and obstacles.reaches_zones(pos, ground, size, filled=False)
@@ -217,10 +217,10 @@ class _Round:
         self.obstacles.add_unit(unit)
 
     def serves(
-        self, position: Point2, size: ViaSize, v: LayerChange, plane: ReferencePlane
+        self, position: Point2, size: ViaSize, c: LayerChange, plane: ReferencePlane
     ) -> bool:
         found = self.ctx.fields.distance_from(
-            position, size.diameter, v.position, plane, self.distance
+            position, size.diameter, c.position, plane, self.distance
         )
         return found <= served_within(self.distance)
 
@@ -262,23 +262,23 @@ class _Round:
 
     def find_spot(
         self,
-        v: LayerChange,
+        c: LayerChange,
         ground: str,
         planes: Sequence[ReferencePlane],
         size: ViaSize,
     ) -> tuple[Point2 | None, bool]:
-        """Nearest spot on rings around `v` with full clearance that serves
+        """Nearest spot on rings around `c` with full clearance that serves
         every one of `planes`, and whether any spot had full clearance."""
-        start = v.inscribed + size.diameter / 2 + OTHER_NET_CLEARANCE
+        start = c.inscribed + size.diameter / 2 + OTHER_NET_CLEARANCE
         stop = served_within(self.distance) - ROUNDING_MARGIN
         clear = False
         for r in _radii(start, stop):
             for a in _angles(RING_ANGLES):
-                pos = _ring_point(v.position, r, a)
+                pos = _ring_point(c.position, r, a)
                 if not _spot_ok(self.obstacles, pos, ground, size):
                     continue
                 clear = True
-                if all(self.serves(pos, size, v, p) for p in planes):
+                if all(self.serves(pos, size, c, p) for p in planes):
                     return pos, True
         return None, clear
 
@@ -287,9 +287,9 @@ class ReturnViaPlanner:
     """Planner for `run_placement`; measures each snapshot once across rounds.
 
     A first pass places full-clearance vias. With `force`, a second pass
-    gives each via still unserved the spot with the most clearance, unless
-    that spot would overlap other-net copper. Each via measured and each
-    target planned is a stop point of `progress`.
+    gives each via or pad still unserved the spot with the most clearance,
+    unless that spot would overlap other-net copper. Each via or pad measured
+    and each target planned is a stop point of `progress`.
     """
 
     def __init__(self, progress: Progress = NO_PROGRESS) -> None:

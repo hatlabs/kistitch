@@ -1,6 +1,6 @@
-"""Return vias: a ground via near every via on a non-ground net.
+"""Return vias: a ground via near every via and PTH pad on a non-ground net.
 
-Each via's reference planes are resolved here; measuring the distance
+Each one's reference planes are resolved here; measuring the distance
 through them is `returnpath`'s job, and planning by it `returnvia_planner`'s.
 """
 
