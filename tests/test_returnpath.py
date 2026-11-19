@@ -20,13 +20,16 @@ BOARD = box(0, 0, 40, 20)
 DISTANCE = 1.5
 SIG = (10.0, 10.0)
 VIA_RADIUS = 0.3
+VIA_DRILL = 0.3
+# The barrel-to-barrel gap between two such vias is their centre distance less this.
+BARRELS = VIA_DRILL
 ANTIPAD = VIA_RADIUS + 0.2
 # 8-connected steps overstate a straight run by up to about 8 %.
 STEP_ERROR = 0.08
 
 
-def via(net, pos, dia=2 * VIA_RADIUS):
-    return Via(id=f"{net}@{pos}", net=net, position=pos, diameter=dia, drill=0.3)
+def via(net, pos, dia=2 * VIA_RADIUS, drill=VIA_DRILL):
+    return Via(id=f"{net}@{pos}", net=net, position=pos, diameter=dia, drill=drill)
 
 
 def signal_via(pos=SIG, net="SIG"):
@@ -92,19 +95,19 @@ def assert_close(measured, straight):
 
 
 @pytest.mark.parametrize("degrees", [0, 22.5, 45])
-@pytest.mark.parametrize("r, served", [(1.4, True), (1.7, False)])
-def test_unobstructed_plane_measures_the_straight_distance(degrees, r, served):
+@pytest.mark.parametrize("r, served", [(1.7, True), (2.0, False)])
+def test_unobstructed_plane_measures_barrel_to_barrel(degrees, r, served):
     results = measure(board([SIG], [("GND", polar(r, degrees))]))
 
     assert set(results) == set(INNER)
     for res in results.values():
         assert res.outcome is Outcome.MEASURED
         assert res.served is served
-        assert_close(res.distance, r)
+        assert_close(res.distance, r - BARRELS)
 
 
 def test_ground_via_at_exactly_the_distance_on_an_axis_is_served():
-    results = measure(board([SIG], [("GND", (SIG[0] + DISTANCE, SIG[1]))]))
+    results = measure(board([SIG], [("GND", (SIG[0] + DISTANCE + BARRELS, SIG[1]))]))
     assert all(r.served for r in results.values())
 
 
@@ -114,18 +117,18 @@ def test_wide_zone_clearance_still_measures_from_the_void_edge():
 
     for res in measure(snap).values():
         assert res.served
-        assert_close(res.distance, 1.4)
+        assert_close(res.distance, 1.4 - BARRELS)
 
 
 def test_row_of_vias_with_merged_antipads_measures_across_the_void():
     row = [(SIG[0] + 0.8 * k, SIG[1]) for k in range(-2, 3)]
-    ret = (SIG[0], SIG[1] + 1.0)
+    ret = (SIG[0], SIG[1] + 1.3)
     snap = board(row, [("GND", ret)])
 
     results = [r for r in measure_returns(snap, None, DISTANCE) if r.plane]
     assert len(results) == 2 * len(row)
     for res in results:
-        straight = math.dist(res.position, ret)
+        straight = math.dist(res.position, ret) - BARRELS
         assert res.outcome is Outcome.MEASURED
         assert_close(res.distance, straight)
         assert res.served is (straight <= DISTANCE)
@@ -138,7 +141,7 @@ def test_return_beyond_a_large_pad_antipad_is_measured_across_the_void():
 
     for res in measure(snap).values():
         assert res.served
-        assert_close(res.distance, 1.4)
+        assert_close(res.distance, 1.4 - BARRELS)
 
 
 def test_island_nearer_than_the_main_pour_does_not_hide_the_pour():
@@ -148,17 +151,17 @@ def test_island_nearer_than_the_main_pour_does_not_hide_the_pour():
 
     for res in measure(snap).values():
         assert res.served
-        assert_close(res.distance, 1.4)
+        assert_close(res.distance, 1.4 - BARRELS)
 
 
-def test_thermal_relief_return_is_measured_from_its_centre():
+def test_thermal_relief_return_is_measured_from_its_drill():
     ret = polar(1.4, 0)
     fill = BOARD.difference(holes((SIG, ANTIPAD), (ret, VIA_RADIUS + 0.3)))
     snap = board([SIG], [("GND", ret)], fills={L: fill for L in INNER})
 
     for res in measure(snap).values():
         assert res.served
-        assert_close(res.distance, 1.4)
+        assert_close(res.distance, 1.4 - BARRELS)
 
 
 def test_ground_via_without_fill_within_thermal_reach_is_no_return():
@@ -172,6 +175,13 @@ def test_ground_via_without_fill_within_thermal_reach_is_no_return():
     assert results["In1.Cu"].distance == math.inf
     assert not results["In1.Cu"].served
     assert results["In2.Cu"].served
+
+
+def test_fill_inside_the_vias_drill_is_no_negative_hop():
+    snap = board([SIG], [("GND", SIG)], fills={L: BOARD for L in INNER})
+
+    for res in measure(snap).values():
+        assert res.distance == 0
 
 
 def test_no_fill_near_the_via_is_its_own_outcome():
@@ -202,7 +212,7 @@ def test_slot_in_one_plane_fails_only_the_end_that_references_it():
     assert not results["In1.Cu"].served
     assert results["In1.Cu"].distance > 2 * 2
     assert results["In2.Cu"].served
-    assert_close(results["In2.Cu"].distance, 1.4)
+    assert_close(results["In2.Cu"].distance, 1.4 - BARRELS)
 
 
 # Midpoint and inward direction of each board outline edge.
@@ -279,6 +289,35 @@ def test_ground_pth_pad_is_a_return_but_an_smd_pad_is_not():
     assert not any(r.served for r in smd.values())
 
 
+PIN_DRILL = 1.075
+PIN_RADIUS = 0.9
+
+
+def test_ground_pin_whose_hole_wall_is_within_the_distance_serves():
+    # Centre to centre is beyond the served threshold; wall to wall is not.
+    centres = 1.9
+    pos = polar(centres, 0)
+    shapes = {L: Point(pos).buffer(PIN_RADIUS) for L in FOUR_LAYERS}
+    pin = Pad("p", None, "GND", PadKind.PTH, "1", pos, PIN_DRILL, shapes)
+    assert centres - VIA_DRILL / 2 > DISTANCE + QUANTISATION
+
+    for res in measure(board([SIG], pads=[pin])).values():
+        assert res.served
+        assert_close(res.distance, centres - VIA_DRILL / 2 - PIN_DRILL / 2)
+
+
+def test_return_drill_too_thin_to_round_to_a_pixel_seeds_its_centre():
+    # (11.4, 10.0) is a pixel corner: the nearest pixel centres lie 0.071 mm
+    # away, beyond the drill rounded to the 0.1 mm grid.
+    thin = 0.02
+    snap = board([SIG])
+    snap.vias = [*snap.vias, via("GND", polar(1.4, 0), drill=thin)]
+
+    for res in measure(snap).values():
+        assert res.served
+        assert_close(res.distance, 1.4 - VIA_DRILL / 2 - thin / 2)
+
+
 def test_two_ends_on_one_plane_are_one_measurement():
     zones = [
         gnd_zone({"In1.Cu": BOARD.difference(holes((SIG, ANTIPAD)))}, layers=["In1.Cu"])
@@ -319,6 +358,7 @@ def test_exempt_via_is_not_measured():
 
 PAD_RADIUS = 0.6
 PAD_ANTIPAD = PAD_RADIUS + 0.2
+PAD_DRILL = 1.0
 
 
 def signal_pad(pos=SIG, net="SIG", layers=("F.Cu", "B.Cu")):
@@ -329,7 +369,7 @@ def signal_pad(pos=SIG, net="SIG", layers=("F.Cu", "B.Cu")):
         Track(f"{net}:{L}@pad", net, L, 0.2, LineString([pos, (x + 3, y)]))
         for L in layers
     ]
-    p = Pad(f"pad:{net}@{pos}", None, net, PadKind.PTH, "1", pos, 1.0, shapes)
+    p = Pad(f"pad:{net}@{pos}", None, net, PadKind.PTH, "1", pos, PAD_DRILL, shapes)
     return p, tracks
 
 
@@ -350,7 +390,7 @@ def pad_board(returns=(), layers=("F.Cu", "B.Cu"), zones=None, pads=()):
 
 
 def test_signal_pth_pad_beyond_its_return_is_unserved_on_each_plane():
-    results = measure_returns(pad_board([("GND", polar(2.0, 0))]), None, DISTANCE)
+    results = measure_returns(pad_board([("GND", polar(2.5, 0))]), None, DISTANCE)
 
     assert sorted(r.plane.layer for r in results) == list(INNER)
     for r in results:
@@ -372,6 +412,15 @@ def test_ground_pth_pad_within_the_distance_serves_a_signal_pth_pad():
 
     assert len(results) == len(INNER)
     assert all(r.served for r in results)
+
+
+def test_signal_pth_pad_is_measured_from_its_drill_wall():
+    results = measure_returns(pad_board([("GND", polar(2.0, 0))]), None, DISTANCE)
+
+    assert len(results) == len(INNER)
+    for r in results:
+        assert r.served
+        assert_close(r.distance, 2.0 - PAD_DRILL / 2 - VIA_DRILL / 2)
 
 
 def test_signal_pth_pad_routed_on_one_layer_is_not_measured():
@@ -405,7 +454,7 @@ def test_via_and_pad_at_one_spot_are_measured_apart():
     plain = BOARD.difference(holes((SIG, PAD_ANTIPAD)))
     snap = Snapshot(
         copper_layers=FOUR_LAYERS,
-        vias=[v],
+        vias=[v, via("GND", polar(2.0, 0))],
         pads=[p],
         tracks=via_tracks + pad_tracks,
         zones=[gnd_zone({L: plain for L in INNER})],
@@ -415,6 +464,8 @@ def test_via_and_pad_at_one_spot_are_measured_apart():
     results = measure_returns(snap, None, DISTANCE)
     assert len(results) == 2 * len(INNER)
     assert {r.change.id for r in results} == {v.id, p.id}
+    by_id = {r.change.id: r.distance for r in results}
+    assert by_id[v.id] - by_id[p.id] == pytest.approx((PAD_DRILL - VIA_DRILL) / 2)
 
 
 def test_board_without_outline_raises_a_typed_error():

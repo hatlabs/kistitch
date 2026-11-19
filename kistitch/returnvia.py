@@ -85,8 +85,8 @@ class ReferencePlane:
 
 @dataclass(frozen=True, eq=False)
 class LayerChange:
-    """A signal via or PTH pad: copper through the board, measured from
-    `position`, its centre.
+    """A signal via or PTH pad: copper through the board around a hole of
+    diameter `drill` at `position`, its centre.
 
     `copper` is its copper per layer. `inscribed` and `circumscribed` are the
     nearest and farthest reach of its outline from `position` on any layer.
@@ -95,6 +95,7 @@ class LayerChange:
     id: str
     net: str
     position: Point2
+    drill: float
     copper: Mapping[str, BaseGeometry]
     inscribed: float
     circumscribed: float
@@ -104,7 +105,8 @@ class LayerChange:
         """A via, its disc on each of `layers`."""
         radius = v.diameter / 2
         disc = Point(v.position).buffer(radius)
-        return cls(v.id, v.net, v.position, dict.fromkeys(layers, disc), radius, radius)
+        copper = dict.fromkeys(layers, disc)
+        return cls(v.id, v.net, v.position, v.drill, copper, radius, radius)
 
     @classmethod
     def of_pad(cls, p: Pad) -> LayerChange:
@@ -116,6 +118,7 @@ class LayerChange:
             p.id,
             p.net,
             p.position,
+            p.drill,
             p.shapes,
             min(shapely.distance(centre, rims).tolist(), default=0.0),
             max((centre.hausdorff_distance(s) for s in shapes), default=0.0),

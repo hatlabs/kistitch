@@ -70,6 +70,12 @@ def _angles(count: int) -> list[float]:
     return [2 * math.pi * k / count for k in range(count)]
 
 
+def _barrels(c: LayerChange, size: ViaSize) -> float:
+    """How much shorter than their centre distance the straight line between
+    `c`'s drill and a return via's of `size` is."""
+    return (c.drill + size.drill) / 2
+
+
 def _radii(start: float, stop: float) -> list[float]:
     if start > stop:
         return []
@@ -80,15 +86,17 @@ def _radii(start: float, stop: float) -> list[float]:
 def _force_spot(
     obstacles: Obstacles, c: LayerChange, ground: str, size: ViaSize, distance: float
 ) -> tuple[Point2, float] | None:
-    """Spot with the most clearance to other-net copper, nearest first on ties.
+    """Spot with the most clearance to other-net copper, nearest first on ties,
+    whose drill lies within a straight `distance` of `c`'s.
 
     Clearance is capped at the normal rule, so a closer spot wins once the
     rule is met.
     """
     best: tuple[tuple[float, float], Point2, float] | None = None
     start = c.inscribed + size.diameter / 2
+    stop = distance + _barrels(c, size) - ROUNDING_MARGIN
     for a in _angles(FORCE_RING_ANGLES):
-        for r in _radii(start, distance - ROUNDING_MARGIN):
+        for r in _radii(start, stop):
             pos = _ring_point(c.position, r, a)
             if not (
                 obstacles.in_bounds(pos, size)
@@ -219,16 +227,15 @@ class _Round:
     def serves(
         self, position: Point2, size: ViaSize, c: LayerChange, plane: ReferencePlane
     ) -> bool:
-        found = self.ctx.fields.distance_from(
-            position, size.diameter, c.position, plane, self.distance
-        )
+        found = self.ctx.fields.distance_from(position, size, c, plane, self.distance)
         return found <= served_within(self.distance)
 
     def unserved(self, t: Target) -> tuple[ReferencePlane, ...]:
         """`t`'s planes that no via planned earlier in this round serves.
 
-        A seed sits within a pixel of its via's centre and no path is shorter
-        than the straight line, so farther vias can't serve.
+        A seed sits within a pixel of its via's drill, the hop starts at
+        `t`'s drill and no path is shorter than the straight line, so
+        farther vias can't serve.
         """
         reach = served_within(self.distance) + self.ctx.fields.grid.pixel
         near = [
@@ -236,7 +243,8 @@ class _Round:
             for u in self.units
             if u.net == t.ground
             and not u.forced
-            and math.dist(u.position, t.change.position) <= reach
+            and math.dist(u.position, t.change.position)
+            <= reach + _barrels(t.change, u.size)
         ]
         return tuple(
             p
@@ -245,9 +253,9 @@ class _Round:
         )
 
     def stand_in(self, t: Target) -> PlannedUnit | None:
-        """A forced via of `t`'s ground within a straight `distance`: a via
-        placed by hand in its stead may serve `t` too, so `t` gets no forced
-        via of its own."""
+        """A forced via of `t`'s ground whose drill lies within a straight
+        `distance` of `t`'s: a via placed by hand in its stead may serve `t`
+        too, so `t` gets no forced via of its own."""
         reach = self.distance + DISTANCE_EPSILON
         return next(
             (
@@ -255,7 +263,8 @@ class _Round:
                 for u in self.units
                 if u.forced
                 and u.net == t.ground
-                and math.dist(u.position, t.change.position) <= reach
+                and math.dist(u.position, t.change.position)
+                <= reach + _barrels(t.change, u.size)
             ),
             None,
         )
@@ -268,9 +277,12 @@ class _Round:
         size: ViaSize,
     ) -> tuple[Point2 | None, bool]:
         """Nearest spot on rings around `c` with full clearance that serves
-        every one of `planes`, and whether any spot had full clearance."""
+        every one of `planes`, and whether any spot had full clearance.
+
+        The rings reach as far as a straight line between the drills can
+        serve."""
         start = c.inscribed + size.diameter / 2 + OTHER_NET_CLEARANCE
-        stop = served_within(self.distance) - ROUNDING_MARGIN
+        stop = served_within(self.distance) + _barrels(c, size) - ROUNDING_MARGIN
         clear = False
         for r in _radii(start, stop):
             for a in _angles(RING_ANGLES):

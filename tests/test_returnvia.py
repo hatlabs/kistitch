@@ -371,11 +371,37 @@ def _blanket(*pockets):
     return pad("X", (7, 7), {"F.Cu": copper})
 
 
+def test_force_reaches_a_spot_within_the_distance_barrel_to_barrel():
+    # The pocket's centre is 1.7 mm out, 1.4 mm barrel to barrel.
+    pocket = _pocket((11.7, 10))
+    snap = snapshot(vias=[signal("SIG", 10, 10)], pads=[_blanket(pocket)])
+
+    (u,) = plan(snap, force=True).units
+
+    assert u.forced
+    assert math.dist(u.position, (10, 10)) > 1.5
+
+
+def test_forced_via_stands_in_for_a_via_within_the_distance_barrel_to_barrel():
+    # B lies 1.65 mm from A's pocket, 1.35 mm barrel to barrel.
+    vias = [signal("A", 10, 10), signal("B", 12.65, 10)]
+    snap = snapshot(vias=vias, pads=[_blanket(_pocket((11, 10)))])
+
+    result = plan(snap, force=True)
+
+    (u,) = result.units
+    assert u.forced
+    x, y = u.position
+    assert [(s.net, s.reason) for s in result.unfixable] == [
+        ("B", f"relies on forced via at ({x:.3f}, {y:.3f})")
+    ]
+
+
 def test_force_keeps_hole_to_hole_from_an_existing_via():
-    # A ground via 1.75 mm from the signal via doesn't serve it, but its hole
-    # is 0.55 mm from the pocket centre.
-    gnd = via("GND", 11.75, 10)
-    pocket = _pocket((11.2, 10))
+    # A ground via 1.75 mm barrel to barrel from the signal via doesn't serve
+    # it, but its hole is 0.55 mm from the pocket centre.
+    gnd = via("GND", 12.05, 10)
+    pocket = _pocket((11.5, 10))
     snap = snapshot(vias=[signal("SIG", 10, 10), gnd], pads=[_blanket(pocket)])
 
     result = plan(snap, force=True)
@@ -414,9 +440,10 @@ def test_force_keeps_out_of_same_net_pads():
 
 
 def test_force_uses_a_spot_inside_the_zone_outline_but_outside_the_fill():
-    # The fill has a hole around the signal via that leaves no full-clearance
-    # spot within reach, though fill lies within the distance.
-    fill = GND_AREA.difference(Point(10, 10).buffer(1.3))
+    # Within the distance of the signal via the fill is a ring too thin for a
+    # via; the rest lies beyond any full-clearance spot that could serve.
+    ring = Point(10, 10).buffer(1.5).difference(Point(10, 10).buffer(1.3))
+    fill = GND_AREA.difference(Point(10, 10).buffer(2.0)).union(ring)
     grounds = [zone("GND", INNER, GND_AREA, fills=dict.fromkeys(INNER, fill))]
     snap = snapshot(vias=[signal("SIG", 10, 10)], zones=grounds)
     assert not plan(snap).units

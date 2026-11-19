@@ -65,6 +65,10 @@ VIA = ViaSize(0.6, 0.3)
 OPTIONS = ReturnViaOptions(distance=DISTANCE)
 STYLE = returnvia_command.STYLE
 RING = (0xFF, 0x2A, 0x6D, 0xFF)
+# A ring reaches --distance past the drill wall of the end it marks.
+VIA_RING = DISTANCE + VIA.drill / 2
+PIN_DRILL = 0.8
+PIN_RING = DISTANCE + PIN_DRILL / 2
 # The panels' axes frames are the only black in a --render figure.
 FRAME_MAX_RGB_SUM = 20
 MIN_FRAME_PX = 100
@@ -324,7 +328,7 @@ def test_unserved_end_gets_a_ring_only_on_its_signal_layer(fakes):
 
     run(Board(), overlay=True, full_map=True)
 
-    off_copper = (SIG[0], SIG[1] - DISTANCE)
+    off_copper = (SIG[0], SIG[1] - VIA_RING)
     assert at(rgba(fakes, "F.Cu"), off_copper) == RING
     assert at(rgba(fakes, "B.Cu"), off_copper)[3] == 0
 
@@ -368,7 +372,7 @@ def test_ring_only_map_agrees_with_the_full_map_inside_the_rings(fakes):
         + [Point(p).buffer(PIN_HOLE) for p in (pin, far_pin)]
     )
     flush = BOARD.difference(holes)
-    slot = box(SIG[0] + 0.6, SIG[1] - 2, SIG[0] + 0.7, SIG[1] + 0.5)
+    slot = box(SIG[0] + 0.6, SIG[1] - 2, SIG[0] + 0.7, SIG[1] + 1.0)
     zones = [gnd_zone({"In1.Cu": flush.difference(slot), "In2.Cu": flush})]
     snap = snapshot(
         signals=(SIG, near_sig, far_sig),
@@ -427,7 +431,7 @@ def test_render_after_everything_is_served_replaces_the_old_heatmap(
     # One panel, showing the board outline and no ring.
     image, frames = panel_frames(path)
     assert len(frames) == 1
-    assert not ring_near(image, frames[0], (SIG[0], SIG[1] - DISTANCE))
+    assert not ring_near(image, frames[0], (SIG[0], SIG[1] - VIA_RING))
 
 
 def field_colour(snap, plane, point) -> tuple[int, ...]:
@@ -494,7 +498,7 @@ def test_two_layer_board_leaves_the_unreferenced_layer_blank(fakes):
     back = rgba(fakes, "B.Cu")
     assert at(back, (15.0, 8.0))[3] == 0
     assert at(back, ON_TRACK)[3] == 0
-    assert at(back, (SIG[0], SIG[1] - DISTANCE)) == RING
+    assert at(back, (SIG[0], SIG[1] - VIA_RING)) == RING
     front = rgba(fakes, "F.Cu")
     assert at(front, ON_TRACK) != colour(STYLE.unreachable_colour)
     assert at(front, ON_TRACK)[3] == 255
@@ -640,7 +644,7 @@ def test_shared_void_shows_its_worst_end(fakes):
 
     via = front_return(snap)
     found = ReturnFields(snap).distance_at(
-        pin, ReferencePlane("In1.Cu", "GND"), DISTANCE
+        LayerChange.of_pad(snap.pads[0]), ReferencePlane("In1.Cu", "GND"), DISTANCE
     )
     assert found is not None and found < via
     (expected,) = palette_at(via)
@@ -717,7 +721,7 @@ def test_signal_pth_pad_shows_its_distance_over_its_clearance_hole(fakes):
 
     image = rgba(fakes, "F.Cu")
     found = ReturnFields(snap).distance_at(
-        PIN, ReferencePlane("In1.Cu", "GND"), DISTANCE
+        LayerChange.of_pad(pad), ReferencePlane("In1.Cu", "GND"), DISTANCE
     )
     assert found is not None
     (expected,) = palette_at(found)
@@ -779,7 +783,7 @@ def pin_snapshot(shape=None, leads=("F.Cu", "B.Cu"), signals=(), returns=()):
         signals=signals, returns=returns, zones=[gnd_zone({L: plain for L in INNER})]
     )
     shapes = {L: shape for L in ("F.Cu", "B.Cu")}
-    snap.pads = [Pad("p", None, "SIG", PadKind.PTH, "1", PIN, 0.8, shapes)]
+    snap.pads = [Pad("p", None, "SIG", PadKind.PTH, "1", PIN, PIN_DRILL, shapes)]
     snap.tracks = [
         *snap.tracks,
         *(
@@ -805,7 +809,7 @@ def test_unserved_pad_is_ringed_on_its_connected_layers_and_counted(fakes):
 
     result = run(Board(), overlay=True, full_map=True)
 
-    off_copper = (PIN[0], PIN[1] - DISTANCE)
+    off_copper = (PIN[0], PIN[1] - PIN_RING)
     assert at(rgba(fakes, "F.Cu"), off_copper) == RING
     assert at(rgba(fakes, "B.Cu"), off_copper) == RING
     assert (result.unserved, result.total) == (1, 1)
@@ -1012,7 +1016,7 @@ def test_layer_outside_every_ground_zone_is_logged_and_counted(fakes, log):
     assert line.rstrip().endswith("outside every ground zone for F.Cu")
     assert any("1 of 1 vias and pads unserved" in m for m in log)
     # Only the F.Cu end is unserved: B.Cu references F.Cu's ground.
-    off_copper = (SIG[0], SIG[1] - DISTANCE)
+    off_copper = (SIG[0], SIG[1] - VIA_RING)
     assert at(rgba(fakes, "F.Cu"), off_copper) == RING
     assert not (rgba(fakes, "B.Cu") == RING).all(axis=2).any()
     # The F.Cu end has no distance to paint: its copper stays blank.
@@ -1348,7 +1352,7 @@ def test_render_panels_ring_the_unserved_end_on_its_layer(fakes, tmp_path):
     run(Board(), render=tmp_path / "heat.png", full_map=True)
 
     image, (front, back) = panel_frames(tmp_path / "heat.png")
-    off_copper = (SIG[0], SIG[1] - DISTANCE)
+    off_copper = (SIG[0], SIG[1] - VIA_RING)
     assert ring_near(image, front, off_copper)
     assert not ring_near(image, back, off_copper)
 
@@ -1366,7 +1370,7 @@ def test_no_ground_fill_end_is_logged_and_ringed(fakes, log):
 
     (line,) = [m for m in log if "unserved:" in m]
     assert line.rstrip().endswith("SIG at (5.000, 5.000): no GND fill nearby on In1.Cu")
-    off_copper = (SIG[0], SIG[1] - DISTANCE)
+    off_copper = (SIG[0], SIG[1] - VIA_RING)
     assert at(rgba(fakes, "F.Cu"), off_copper) == RING
     assert at(rgba(fakes, "B.Cu"), off_copper) != RING
 

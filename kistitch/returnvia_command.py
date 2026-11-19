@@ -249,13 +249,16 @@ def paint_ends(m: CoverageMap, fields: ReturnFields, ends: Sequence[End]) -> Non
 def markers(
     results: Sequence[PlaneReturn], maps: Sequence[CoverageMap], distance: float
 ) -> dict[render.MapKey, render.Markers]:
-    """Per map: a ring of radius `distance` around each via or pad end
-    unserved on that layer, showing the reach its return needs."""
+    """Per map: a ring around each via or pad end unserved on that layer,
+    reaching `distance` past its drill wall: a return's drill wall inside
+    the ring can serve it."""
     rings: dict[str, list[render.Disc]] = {}
     for r in results:
         if not r.served:
             for layer in r.layers:
-                rings.setdefault(layer, []).append((r.position, distance))
+                rings.setdefault(layer, []).append(
+                    (r.position, distance + r.change.drill / 2)
+                )
     return {
         (m.net, m.layer): render.Markers(rings=tuple(rings.get(m.layer, ())))
         for m in maps

@@ -9,6 +9,7 @@ from kistitch import drc
 from kistitch.placement import markers_for
 from kistitch.plan import QUANTISATION
 from kistitch.progress import Cancelled, Progress, Stage
+from kistitch.raster import PIXEL
 from kistitch.returnpath import Outcome, measure_returns
 from kistitch.returnvia import ReturnViaOptions
 from kistitch.returnvia_command import with_returns
@@ -145,14 +146,15 @@ def test_ends_failing_on_two_ground_nets_get_one_via_each():
 
 
 def test_spot_on_the_outermost_ring_passes_the_check():
-    # A keep-off leaves room only on the last ring, 1.55 mm out.
-    hole = Pad("h", None, "", PadKind.NPTH, "", SIG, 0.4, {}, clearance_override=0.92)
+    # A keep-off leaves room only on the last ring, 1.85 mm out: beyond the
+    # served threshold centre to centre, within it barrel to barrel.
+    hole = Pad("h", None, "", PadKind.NPTH, "", SIG, 0.4, {}, clearance_override=1.25)
     snap = board([SIG], pads=[hole])
 
     result = plan(snap)
 
     (u,) = result.units
-    assert math.dist(u.position, SIG) > DISTANCE
+    assert math.dist(u.position, SIG) > DISTANCE + QUANTISATION
     assert not unserved(check(snap, result))
 
 
@@ -163,6 +165,19 @@ def test_via_served_by_a_via_planned_earlier_gets_none_of_its_own():
     result = plan(snap)
 
     assert len(result.units) == 1
+    assert not unserved(check(snap, result))
+
+
+def test_earlier_via_serves_a_via_barrel_to_barrel_beyond_its_centre_reach():
+    # SIG's via lands on its first ring, 0.9 mm out to the east; `later`
+    # lies about 1.75 mm beyond it, 1.45 mm barrel to barrel.
+    later = (SIG[0] + 0.9 + 1.75, SIG[1])
+    snap = board([SIG, later])
+
+    result = plan(snap)
+
+    (u,) = result.units
+    assert math.dist(u.position, later) > DISTANCE + QUANTISATION + PIXEL
     assert not unserved(check(snap, result))
 
 
@@ -478,8 +493,10 @@ PIN_RADIUS = 0.85
 PIN_DRILL = 1.0
 PIN_ANTIPAD_GAP = 0.2
 PITCH = 2.54
-# Other-net F.Cu tracks along a row, a clearance off its 1.7 mm pads.
-ROW_TRACK_OFFSET = 1.25
+# Other-net F.Cu tracks along a row, a clearance off its 1.7 mm pads, too
+# wide for a spot beyond them to reach a pin.
+ROW_TRACK_WIDTH = 1.0
+ROW_TRACK_OFFSET = PIN_RADIUS + 0.3 + ROW_TRACK_WIDTH / 2
 
 
 def pin(pos, net="SIG", shape=None):
@@ -602,7 +619,11 @@ def row_parts(offsets=(-PITCH, 0.0, PITCH), measured=(0.0,)):
         (pins if dx in measured else others).append(p)
     tracks = [
         Track(
-            f"X{dy}", "X", "F.Cu", 0.2, LineString([(x - 6, y + dy), (x + 8, y + dy)])
+            f"X{dy}",
+            "X",
+            "F.Cu",
+            ROW_TRACK_WIDTH,
+            LineString([(x - 6, y + dy), (x + 8, y + dy)]),
         )
         for dy in (-ROW_TRACK_OFFSET, ROW_TRACK_OFFSET)
     ]
