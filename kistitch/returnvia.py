@@ -118,7 +118,7 @@ class LayerChange:
             p.id,
             p.net,
             p.position,
-            p.drill,
+            p.barrel_drill,
             p.shapes,
             min(shapely.distance(centre, rims).tolist(), default=0.0),
             max((centre.hausdorff_distance(s) for s in shapes), default=0.0),

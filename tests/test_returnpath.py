@@ -1,3 +1,4 @@
+import dataclasses
 import math
 
 import pytest
@@ -555,3 +556,32 @@ def test_pads_void_reaches_as_far_as_its_measurement_hops():
     win, void = found
     rim = fields.grid.index((SIG[0] + antipad_edge - fields.grid.pixel, SIG[1]))
     assert void[rim[0] - win[0].start, rim[1] - win[1].start]
+
+
+SLOT_SHORT = 0.6
+SLOT_LONG = 1.7
+
+
+def test_slotted_ground_pin_serves_by_its_short_axis():
+    # Across the slot, the hole wall lies half the short axis from the centre.
+    centres = 1.9
+    pos = polar(centres, 0)
+    shapes = {L: Point(pos).buffer(PIN_RADIUS) for L in FOUR_LAYERS}
+    pin = Pad(
+        "p", None, "GND", PadKind.PTH, "1", pos, SLOT_LONG, shapes,
+        short_drill=SLOT_SHORT,
+    )  # fmt: skip
+
+    for res in measure(board([SIG], pads=[pin])).values():
+        assert_close(res.distance, centres - VIA_DRILL / 2 - SLOT_SHORT / 2)
+
+
+def test_slotted_signal_pad_hops_from_its_short_axis():
+    snap = pad_board([("GND", polar(2.0, 0))])
+    snap.pads[0] = dataclasses.replace(
+        snap.pads[0], drill=PAD_DRILL, short_drill=SLOT_SHORT / 2
+    )
+
+    for r in measure_returns(snap, None, DISTANCE):
+        assert_close(r.distance, 2.0 - SLOT_SHORT / 4 - VIA_DRILL / 2)
+        assert not r.served

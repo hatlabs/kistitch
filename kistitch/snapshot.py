@@ -80,6 +80,14 @@ class Pad:
     drill: float
     shapes: Mapping[str, BaseGeometry]
     clearance_override: float | None = None
+    # An oval drill's shorter axis; None for a round drill.
+    short_drill: float | None = None
+
+    @property
+    def barrel_drill(self) -> float:
+        """The drill diameter return distances count from: a slot's shorter
+        axis, so a slot never measures closer than its wall."""
+        return self.drill if self.short_drill is None else self.short_drill
 
 
 @dataclass(frozen=True, eq=False)
@@ -404,6 +412,9 @@ def _read_pads(
                 drill=max(drill.x, drill.y) / NM_PER_MM,
                 shapes=shapes[p.id.value],
                 clearance_override=override,
+                short_drill=(
+                    min(drill.x, drill.y) / NM_PER_MM if drill.x != drill.y else None
+                ),
             )
         )
     return out

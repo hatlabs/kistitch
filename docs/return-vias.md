@@ -22,7 +22,7 @@ Each via end has a reference plane: the nearest other copper layer in stack orde
 
 ## How the distance is measured
 
-The return distance on a plane runs barrel to barrel: from the wall of the via's drilled hole to the drill wall of the nearest return, through that plane's ground fill. It starts with a straight hop from the via's drill wall across its own antipad, the void around the via in the plane, and then follows the fill. A path around a slot in the plane is measured around the slot. A through-hole pad is measured from its drill wall too, so the hop across its clearance hole is part of its distance. An oval drill counts as a round hole as wide as its longer axis.
+The return distance on a plane runs barrel to barrel: from the wall of the via's drilled hole to the drill wall of the nearest return, through that plane's ground fill. It starts with a straight hop from the via's drill wall across its own antipad, the void around the via in the plane, and then follows the fill. A path around a slot in the plane is measured around the slot. A through-hole pad is measured from its drill wall too, so the hop across its clearance hole is part of its distance. An oval drill counts as a round hole as wide as its shorter axis, so a slot never measures closer than its wall.
 
 Returns are the ground net's vias and through-hole pads, counted only where the plane's fill lies within reach of them. A return only serves a plane of its own net: a GND via does not serve a via end whose plane is GND_ISO.
 

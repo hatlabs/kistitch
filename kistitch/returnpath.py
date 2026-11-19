@@ -177,7 +177,7 @@ class ReturnFields:
             for v in snap.vias
             if v.net == plane.ground
         ] + [
-            (p.position, p.drill, p.shapes[plane.layer])
+            (p.position, p.barrel_drill, p.shapes[plane.layer])
             for p in snap.pads
             if p.net == plane.ground
             and p.kind is PadKind.PTH

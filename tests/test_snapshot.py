@@ -509,3 +509,17 @@ def test_a_busy_layer_name_read_is_not_taken_for_the_canonical_name():
         read(BusyLayerNameBoard())
 
     assert error.value.code == ApiStatusCode.AS_BUSY
+
+
+def test_oval_drill_keeps_its_long_axis_for_clearance_and_its_short_axis():
+    round_, oval = kipy_pad("round", "GND", 0, 0), kipy_pad("oval", "GND", 3, 0)
+    for p, (x, y) in ((round_, (1.0, 1.0)), (oval, (1.0, 2.5))):
+        p.proto.pad_stack.drill.diameter.x_nm = nm(x)
+        p.proto.pad_stack.drill.diameter.y_nm = nm(y)
+
+    snap = read(FakeBoard(pads=[round_, oval]))
+
+    assert [(p.drill, p.short_drill, p.barrel_drill) for p in snap.pads] == [
+        (pytest.approx(1.0), None, pytest.approx(1.0)),
+        (pytest.approx(2.5), pytest.approx(1.0), pytest.approx(1.0)),
+    ]
