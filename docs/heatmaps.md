@@ -42,7 +42,7 @@ Other-net clearances are ignored for this, so a spot blocked only by other coppe
 
 `--full-map` shows the copper of every layer on which a via or through-hole pad that changes layers connects. That is every net's tracks, pads and pours, ground pours included, since a via placed anywhere in that copper would need its own return, and the ground vias. Signal vias show only on layers where they have a measured end.
 
-Each pixel is coloured by the distance through its reference plane to the nearest ground return. Its reference plane is chosen as for a via or pad end there: the nearest other copper layer in stack order with a ground zone outline at that pixel (see [Return vias](return-vias.md#which-vias-are-measured)).
+Each pixel is coloured by the distance through its reference plane to the drill wall of the nearest ground return. Its reference plane is chosen as for a via or pad end there: the nearest other copper layer in stack order with a ground zone outline at that pixel (see [Return vias](return-vias.md#which-vias-are-measured)).
 
 Around each via or through-hole pad:
 
@@ -57,7 +57,7 @@ The colour scale:
 - Purple copper has no path to a return: it lies over a slot or void in its reference plane.
 - Copper with no ground zone outline on any other layer has no reference plane and is left blank, such as the ground side of a two-layer board.
 
-A pink ring of radius `--distance` marks each unserved via or pad end on its own layer. Layers with identical maps share a panel.
+A pink ring marks each unserved via or pad end on its own layer. It reaches `--distance` past the via's or pad's drill wall, so a return whose drill wall lies inside the ring can serve it. Layers with identical maps share a panel.
 
 `returnvia` logs how many vias and pads are exempt, how many are unserved, and how many of their plane returns are unserved. Set `LOGURU_LEVEL=DEBUG` to list each unserved via or pad end with its distance or the reason it can't be served.
 

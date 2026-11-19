@@ -269,7 +269,7 @@ def parse_args():
         "-d",
         type=float,
         default=DEFAULT_DISTANCE,
-        help="Maximum distance from a via or pad to its return via, in mm",
+        help="Maximum distance from a via's or pad's drill wall to its return's, in mm",
     )
     _add_ground_nets_argument(returnvia_parser)
     returnvia_parser.add_argument(

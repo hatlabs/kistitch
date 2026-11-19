@@ -116,7 +116,7 @@ Finish with Heatmap on Power stitching and on Return vias. Steps 3 and 4 place g
 
 ## How it works
 
-**Return vias.** For each end of a signal via, kistitch takes the nearest other copper layer with a ground zone at the via as its reference plane, and measures the distance through that plane's ground fill to the nearest ground via or through-hole pad. A signal through-hole pad connected on two or more layers is measured, reported and given a return via like a via; a pad or via connected on fewer layers is exempt. Ground through-hole pads are returns. For a via or pad beyond the limit, it tries spots on rings around it, nearest first, and takes the first with full clearance that serves every unserved end.
+**Return vias.** For each end of a signal via, kistitch takes the nearest other copper layer with a ground zone at the via as its reference plane, and measures the distance through that plane's ground fill, from the via's drill wall to the drill wall of the nearest ground via or through-hole pad. A signal through-hole pad connected on two or more layers is measured, reported and given a return via like a via; a pad or via connected on fewer layers is exempt. Ground through-hole pads are returns. For a via or pad beyond the limit, it tries spots on rings around it, nearest first, and takes the first with full clearance that serves every unserved end.
 
 **Pour stitching.** kistitch rasterises each net's pours at 0.1 mm, places vias on a square lattice, then fills the remaining gaps one at a time, farthest point first. A finger 2 mm from a via across a gap but 8 mm away along the copper counts as 8 mm. Narrow spots get a smaller fallback via.
 
