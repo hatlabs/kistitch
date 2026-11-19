@@ -9,9 +9,10 @@ from kistitch.returnpath import (
     NoBoardOutlineError,
     Outcome,
     PlaneReturn,
+    ReturnFields,
     measure_returns,
 )
-from kistitch.returnvia import ReferencePlane
+from kistitch.returnvia import LayerChange, ReferencePlane
 from kistitch.snapshot import Pad, PadKind, Snapshot, Track, Via, Zone
 
 FOUR_LAYERS = ("F.Cu", "In1.Cu", "In2.Cu", "B.Cu")
@@ -471,3 +472,67 @@ def test_via_and_pad_at_one_spot_are_measured_apart():
 def test_board_without_outline_raises_a_typed_error():
     with pytest.raises(NoBoardOutlineError):
         measure_returns(board([SIG], edge=False), None, DISTANCE)
+
+
+# A terminal-block pin: its antipad edge lies beyond the distance from its
+# centre, but within the distance of its drill wall.
+BIG_DRILL = 1.3
+BIG_RADIUS = 1.3
+BIG_GAP = 1.35
+BIG_RETURN = polar(BIG_DRILL / 2 + BIG_GAP + VIA_DRILL / 2, 0)
+
+
+def big_pad_board(antipad):
+    shapes = {L: Point(SIG).buffer(BIG_RADIUS) for L in FOUR_LAYERS}
+    p = Pad("pin", None, "SIG", PadKind.PTH, "1", SIG, BIG_DRILL, shapes)
+    x, y = SIG
+    tracks = [
+        Track(f"SIG:{L}@pin", "SIG", L, 0.2, LineString([SIG, (x - 3, y)]))
+        for L in ("F.Cu", "B.Cu")
+    ]
+    fill = BOARD.difference(antipad)
+    return Snapshot(
+        copper_layers=FOUR_LAYERS,
+        vias=[via("GND", BIG_RETURN)],
+        tracks=tracks,
+        zones=[gnd_zone({L: fill for L in INNER})],
+        pads=[p],
+        edge_paths=[[(0, 0), (40, 0), (40, 20), (0, 20), (0, 0)]],
+    )
+
+
+def test_pad_whose_antipad_edge_is_beyond_the_distance_of_its_centre_is_measured():
+    antipad_edge = 1.7
+    assert antipad_edge > DISTANCE
+    snap = big_pad_board(holes((SIG, antipad_edge)))
+
+    for res in measure(snap).values():
+        assert res.outcome is Outcome.MEASURED
+        assert res.served
+        assert_close(res.distance, BIG_GAP)
+
+
+def test_pad_with_only_part_of_its_antipad_rim_near_its_centre_hops_straight_across():
+    # Its long sides lie within the distance of its centre, its ends beyond.
+    x, y = SIG
+    antipad = box(x - 1.7, y - 1.45, x + 1.7, y + 1.45)
+    snap = big_pad_board(antipad)
+
+    for res in measure(snap).values():
+        assert res.outcome is Outcome.MEASURED
+        assert_close(res.distance, BIG_GAP)
+
+
+def test_pads_void_reaches_as_far_as_its_measurement_hops():
+    antipad_edge = 1.7
+    snap = big_pad_board(holes((SIG, antipad_edge)))
+    fields = ReturnFields(snap)
+
+    found = fields.void(
+        LayerChange.of_pad(snap.pads[0]), ReferencePlane("In1.Cu", "GND"), DISTANCE
+    )
+
+    assert found is not None
+    win, void = found
+    rim = fields.grid.index((SIG[0] + antipad_edge - fields.grid.pixel, SIG[1]))
+    assert void[rim[0] - win[0].start, rim[1] - win[1].start]

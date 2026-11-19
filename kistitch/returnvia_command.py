@@ -184,7 +184,7 @@ def measured_ends(
         copper = {L: r.change.copper[L] for L in r.layers}
         if shown is not None and not shown(copper):
             continue
-        void = fields.void(r.position, r.plane, distance)
+        void = fields.void(r.change, r.plane, distance)
         assert void is not None
         out.append(End(r.net, copper, void, r.distance))
     return out

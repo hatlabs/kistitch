@@ -232,8 +232,8 @@ class ReturnFields:
         """The ways into the fill from `change`: pixels and the straight hop
         from its drill wall to each. None with no fill near it.
 
-        Its void is the non-fill region around its centre, within `distance`;
-        every fill pixel next to it is a way in.
+        Its void is the non-fill region around its centre, within `distance`
+        of its drill wall; every fill pixel next to it is a way in.
         """
         key = (change.position, change.drill, plane, distance)
         if key not in self._entry_cache:
@@ -247,7 +247,7 @@ class ReturnFields:
         centre = g.index(position)
         if not g.contains(centre):
             return None
-        win, near = g.disc(centre, distance)
+        win, near = g.disc(centre, distance + drill / 2)
         fill = self.fill(plane)[win]
         if not (fill & near).any():
             return None
@@ -260,16 +260,16 @@ class ReturnFields:
         return rr + win[0].start, cc + win[1].start, hops
 
     def void(
-        self, position: Point2, plane: ReferencePlane, distance: float
+        self, change: LayerChange, plane: ReferencePlane, distance: float
     ) -> tuple[tuple[slice, slice], BoolMap] | None:
-        """The window around `position` and the void in `plane`'s fill that
-        contains it, within `distance`: the antipad `distance_at` hops
-        across. None off the grid."""
+        """The window around `change` and the void in `plane`'s fill that
+        contains it, within `distance` of its drill wall: the antipad
+        `distance_at` hops across. None off the grid."""
         g = self.grid
-        centre = g.index(position)
+        centre = g.index(change.position)
         if not g.contains(centre):
             return None
-        win, near = g.disc(centre, distance)
+        win, near = g.disc(centre, distance + change.drill / 2)
         local = (centre[0] - win[0].start, centre[1] - win[1].start)
         return win, _void(self.fill(plane)[win], near, local)
 
