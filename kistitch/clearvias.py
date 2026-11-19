@@ -11,7 +11,7 @@ import kipy.board
 from loguru import logger
 
 from kistitch.commit import REFILLS_OFF_MESSAGE, refill_tolerant
-from kistitch.returnvia import filled_layers, tied_layers
+from kistitch.returnvia import LayerChange, filled_layers, tied_layers
 from kistitch.snapshot import Snapshot, Via
 
 
@@ -22,14 +22,13 @@ def stitching_vias(snapshot: Snapshot, nets: Iterable[str] | None = None) -> lis
     A track or a lock is how a hand-placed via tells itself apart.
     """
     wanted = None if nets is None else set(nets)
-    return [
-        v
-        for v in snapshot.vias
-        if (wanted is None or v.net in wanted)
-        and not v.locked
-        and filled_layers(snapshot, v)
-        and not tied_layers(snapshot, v)
-    ]
+    out = []
+    for v in snapshot.vias:
+        if (wanted is None or v.net in wanted) and not v.locked:
+            c = LayerChange.of_via(v, snapshot.copper_layers)
+            if filled_layers(snapshot, c) and not tied_layers(snapshot, c):
+                out.append(v)
+    return out
 
 
 @dataclass(frozen=True, kw_only=True)

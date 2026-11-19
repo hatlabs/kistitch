@@ -170,7 +170,7 @@ class TestRuns:
         assert p.spawned.daemons[-1] is False
         status = p.controller.status(Step.RETURN)
         assert status.icon is Icon.DONE
-        assert status.lines == ("Placed 61 vias; every via served",)
+        assert status.lines == ("Placed 61 vias; every via and pad served",)
         assert status.detail == "Place · just now"
         assert p.controller.outcome is not None
         assert p.controller.outcome.headline == "Return vias: placed 61 vias"
@@ -431,7 +431,7 @@ class TestStatusLines:
         assert isinstance(job, ReturnJob)
         assert job.view is View.UNSERVED
         assert p.controller.status(Step.RETURN).detail == (
-            "Heatmap: unserved vias · just now"
+            "Heatmap: unserved vias and pads · just now"
         )
         assert p.controller.heatmap_view is View.UNSERVED
 
@@ -442,7 +442,7 @@ class TestStatusLines:
         heatmap(p, Step.GROUND, GROUND_HEATMAP)
 
         assert p.controller.status(Step.RETURN).detail == (
-            "Heatmap: unserved vias · just now (markers and heatmap since replaced)"
+            "Heatmap: unserved vias and pads · just now (markers and heatmap since replaced)"
         )
         assert p.controller.heatmap_view is None
 
@@ -463,7 +463,7 @@ class TestStatusLines:
         place(p, Step.PAD_VIAS, PADS_PLACED)
 
         assert p.controller.status(Step.RETURN).detail == (
-            "Heatmap: unserved vias · just now (markers since replaced)"
+            "Heatmap: unserved vias and pads · just now (markers since replaced)"
         )
 
     def test_a_heatmap_kicad_refused_replaces_nothing(self) -> None:
@@ -473,7 +473,7 @@ class TestStatusLines:
         heatmap(p, Step.POWER, stitch_result((5.0,), placed_overlays=False))
 
         assert p.controller.status(Step.RETURN).detail == (
-            "Heatmap: unserved vias · just now"
+            "Heatmap: unserved vias and pads · just now"
         )
         assert p.controller.status(Step.POWER).lines == (
             "5.0 mm² beyond 10 mm on 1 of 1 nets",
@@ -491,7 +491,7 @@ class TestStatusLines:
 
         assert isinstance(p.runner.jobs[-1], ClearJob)
         assert p.controller.status(Step.RETURN).detail == (
-            "Heatmap: unserved vias · just now "
+            "Heatmap: unserved vias and pads · just now "
             "(markers since replaced, heatmap since cleared)"
         )
         assert p.controller.status(Step.POWER).detail == (
@@ -507,7 +507,7 @@ class TestStatusLines:
         heatmap(p, Step.GROUND, stitch_result(()))
 
         assert p.controller.status(Step.RETURN).detail == (
-            "Heatmap: unserved vias · just now (markers and heatmap since replaced)"
+            "Heatmap: unserved vias and pads · just now (markers and heatmap since replaced)"
         )
         assert p.controller.outcome is not None
         assert p.controller.outcome.headline == "Ground stitching: no heatmap needed"
@@ -522,7 +522,7 @@ class TestStatusLines:
         p.controller.clear()
         p.finish()
         assert p.controller.status(Step.RETURN).detail == (
-            "Heatmap: unserved vias · just now"
+            "Heatmap: unserved vias and pads · just now"
         )
 
     def test_chosen_nets_that_lost_their_pours_measure_nothing(self) -> None:
@@ -545,7 +545,7 @@ class TestStatusLines:
         )
         # The run still took the earlier heatmap and markers off the board.
         assert c.status(Step.RETURN).detail == (
-            "Heatmap: unserved vias · just now (markers and heatmap since replaced)"
+            "Heatmap: unserved vias and pads · just now (markers and heatmap since replaced)"
         )
 
     def test_a_place_that_left_no_markers_owns_none(self) -> None:

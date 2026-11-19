@@ -25,7 +25,7 @@ These go before the command, as in `kistitch --dry-run returnvia`.
 | `--refill`, `--no-refill` | Refill the zones before measuring or placing, after committing, and before and after `clear --vias`. On by default ([Zone refills](#zone-refills)). |
 | `--version` | Print the version. |
 
-`LOGURU_LEVEL=DEBUG` in the environment turns on debug logging, such as the list of unserved via ends from `returnvia`.
+`LOGURU_LEVEL=DEBUG` in the environment turns on debug logging, such as the list of unserved via and pad ends from `returnvia`.
 
 ## Options of the placing commands
 
@@ -41,7 +41,7 @@ These go before the command, as in `kistitch --dry-run returnvia`.
 
 | Option | Effect |
 |---|---|
-| `--distance`, `-d` | The distance in mm: from a via to its return for `returnvia` (default 1.5), through the copper to a stitch for `pourstitch` (default 3 for ground, 10 with `--power`). |
+| `--distance`, `-d` | The distance in mm: from a via or pad to its return for `returnvia` (default 1.5), through the copper to a stitch for `pourstitch` (default 3 for ground, 10 with `--power`). |
 | `--ground-nets NET [NET ...]` | The ground nets. By default, the nets with zones on two or more inner layers, else `GND` ([Ground nets](return-vias.md#ground-nets)). |
 | `--check` | Only measure the existing vias; place none ([Check runs](heatmaps.md#check-runs)). |
 | `--render PATH` | Write the heatmap panels to PATH ([Heatmaps](heatmaps.md)). |
@@ -57,7 +57,7 @@ Options of one command:
 | `pourstitch` | `--nets NET [NET ...]` | Only these nets, within the run's class. |
 | `pourstitch` | `--fallback-via DIAMETER/DRILL` | Smaller via size for spots the netclass size doesn't fit. Default `0.5/0.3`. |
 | `returnvia` | `--force` | Place a placeholder via where none fits with full clearance ([Forced vias](return-vias.md#forced-vias)). |
-| `returnvia` | `--full-map` | Map all copper, not only the copper around unserved via ends. |
+| `returnvia` | `--full-map` | Map all copper, not only the copper around unserved via and pad ends. |
 | `clear` | `--vias` | Also remove stitching vias ([Clearing](clearing.md)). |
 | `clear` | `--nets NET [NET ...]` | Nets whose vias `--vias` removes. Default: every net with a zone. Needs `--vias`. |
 | `clear` | `--overlay-layers LAYER [LAYER ...]` | User layers to remove kistitch overlays from. Default User.1 to User.4. |
@@ -94,7 +94,7 @@ Some things still happen in a dry run:
 - The zone refill before planning runs, unless refills are off.
 - `--overlay` still places its images. With `--check`, it also replaces every shape on User.Eco2, hand-drawn ones included, with the run's markers ([Check runs](heatmaps.md#check-runs)). Overlay layers that are disabled stay disabled, and the images are then only written to files ([Overlays on the board](heatmaps.md#overlays-on-the-board)).
 
-The heatmaps of a dry run include the planned vias. For `returnvia` they count as returns, except forced ones, so a dry run shows which via ends the run would leave unserved.
+The heatmaps of a dry run include the planned vias. For `returnvia` they count as returns, except forced ones, so a dry run shows which via and pad ends the run would leave unserved.
 
 A dry run of `clear --vias` refills, then logs how many vias per net would go, and removes nothing.
 

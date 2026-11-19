@@ -1,8 +1,8 @@
 # Return vias
 
-This page explains how `kistitch returnvia` decides which vias need a ground return, how it measures the distance to one, and where it places new ground vias. For an overview and the first run, see the [README](../README.md).
+This page explains how `kistitch returnvia` decides which vias and through-hole pads need a ground return, how it measures the distance to one, and where it places new ground vias. For an overview and the first run, see the [README](../README.md).
 
-A signal that changes layers through a via also changes its reference plane. Its return current has to cross between the planes too, and it does that through the nearest ground via. `returnvia` places a ground via within `--distance` (1.5 mm by default) of every via on a non-ground net that has no ground return that close.
+A signal that changes layers through a via also changes its reference plane. Its return current has to cross between the planes too, and it does that through the nearest ground via. `returnvia` places a ground via within `--distance` (1.5 mm by default) of every via and through-hole pad on a non-ground net that has no ground return that close.
 
 ## Ground nets
 
@@ -12,19 +12,21 @@ The ground nets are the nets with zones on two or more inner layers. On a board 
 
 Vias on ground nets never need a return. Every other via, power nets included, is a signal via here.
 
+A through-hole pad on a signal net changes layers like a via. It is measured, reported and given a return via like one, and on this page "via" covers it unless the text says otherwise. Through-hole pads on ground nets are returns. SMD pads, NPTH pads and pads without a net are not measured.
+
 ## Which vias are measured
 
-A via end is a copper layer on which the via connects: a track, pad or zone fill of the via's own net touches it there. A via that connects on fewer than two layers carries no layer change. It is exempt and is not measured. The run logs how many vias are exempt.
+A via end is a copper layer on which the via or pad connects: a track, pad or zone fill of its own net touches its copper there. A via or pad that connects on fewer than two layers carries no layer change, such as a connector pin routed on one layer only. It is exempt and is not measured. The run logs how many vias and pads are exempt.
 
 Each via end has a reference plane: the nearest other copper layer in stack order with a ground zone outline at the via. When two layers are equally near, the upper one wins. When several ground zones overlap on that layer, the one with the highest zone priority wins. Two ends of a via that share a reference plane are measured once.
 
 ## How the distance is measured
 
-The return distance on a plane runs from the via's centre to the centre of the nearest return, through that plane's ground fill. It starts with a straight hop across the via's own antipad, the void around the via in the plane, and then follows the fill. A path around a slot in the plane is measured around the slot.
+The return distance on a plane runs barrel to barrel: from the wall of the via's drilled hole to the drill wall of the nearest return, through that plane's ground fill. It starts with a straight hop from the via's drill wall across its own antipad, the void around the via in the plane, and then follows the fill. A path around a slot in the plane is measured around the slot. A through-hole pad is measured from its drill wall too, so the hop across its clearance hole is part of its distance. An oval drill counts as a round hole as wide as its shorter axis, so a slot never measures closer than its wall.
 
 Returns are the ground net's vias and through-hole pads, counted only where the plane's fill lies within reach of them. A return only serves a plane of its own net: a GND via does not serve a via end whose plane is GND_ISO.
 
-A via end is served when its return distance is at most `--distance` plus 0.1 mm. The extra 0.1 mm covers the 0.1 mm raster the distances are measured on. Paths on the raster run in eight directions, which overstates a straight run by up to about 8 % between those directions. The effective straight-line limit therefore depends on direction: at the default 1.5 mm it is about 1.48–1.6 mm.
+A via end is served when its return distance is at most `--distance` plus 0.1 mm. The extra 0.1 mm covers the 0.1 mm raster the distances are measured on. Paths on the raster run in eight directions, which overstates a straight run by up to about 8 % between those directions. The effective straight-line limit between the drill walls therefore depends on direction: at the default 1.5 mm it is about 1.48–1.6 mm.
 
 Two kinds of via end are reported but can't be served by a new via:
 
@@ -39,7 +41,9 @@ Each via end is measured against the ground net whose zone on its reference plan
 
 ## How new vias are placed
 
-The planner measures candidate spots the same way as the check. For each via and ground net with unserved ends, it tries spots on rings around the via, nearest first, out to `--distance` plus the 0.1 mm margin. It takes the first spot with full clearance that serves every one of those ends. A spot across a slot in the plane is rejected when the path around the slot is too long.
+The planner measures candidate spots the same way as the check. For each via and ground net with unserved ends, it tries spots on rings around the via, nearest first, out to where the straight line between the two drill walls reaches `--distance` plus the 0.1 mm margin. It takes the first spot with full clearance that serves every one of those ends. A spot across a slot in the plane is rejected when the path around the slot is too long.
+
+A ground pin is a return like a ground via: it serves a signal pin's end when it is on that end's plane's ground net and its drill wall is within `--distance` of the signal pin's through the fill. On a 2.54 mm header with 1 mm drills, neighbouring pins' drill walls are 1.54 mm apart, so a ground pin next to a signal pin just serves it at the default distance. A pin with no ground pin that close gets a return via beside the row where one fits, or is reported as unfixable.
 
 A return via is placed only where the ground net's zone outlines cover at least two copper layers, and it must sit inside the fill on each of them. Its size comes from the ground net's netclass, or from `--via DIAMETER/DRILL`.
 
@@ -55,13 +59,13 @@ The planner measures each ground net's plane as it was filled before the run. A 
 
 ## Forced vias
 
-`returnvia --force` adds a second pass. Every via that is still without a return gets one at the spot with the most clearance to other-net copper within `--distance`, nearest first among equally clear spots. A forced via never overlaps other-net copper and keeps the hole-to-hole and same-net pad rules. Only the clearance to other-net copper is relaxed, so it may violate clearance.
+`returnvia --force` adds a second pass. A via or pad that is still without a return, and that a return via could serve, gets one where one fits: at the spot with the most clearance to other-net copper whose drill wall lies within `--distance` of the via's or pad's, nearest first among equally clear spots. A forced via never overlaps other-net copper and keeps the hole-to-hole and same-net pad rules. Only the clearance to other-net copper is relaxed, so it may violate clearance.
 
 Forced vias survive the DRC check despite clearance violations and get no marker. The log lists each forced via's net and position, and KiCad's own DRC finds the ones that violate clearance, so you can move them by hand.
 
-A forced via is a placeholder. It needs the ground zone outlines at its spot but may lie outside the fill, so it serves nothing in the run: the run's log and heatmaps still count its signal via as unserved. A later `returnvia --check` counts it like any other ground via once the refilled fill reaches it, clearance violation or not. Other vias of the same ground net within `--distance` of it in a straight line get no forced via of their own. They are reported as unfixable with "relies on forced via at (x, y)" and get a circle marker, because a via placed by hand in place of the forced one may serve them too. After moving a forced via, refill the zones, run `returnvia --check` to confirm its return, and run KiCad's DRC to confirm its clearance.
+A forced via is a placeholder. It needs the ground zone outlines at its spot but may lie outside the fill, so it serves nothing in the run: the run's log and heatmaps still count its signal via or pad as unserved. A later `returnvia --check` counts it like any other ground via once the refilled fill reaches it, clearance violation or not. Other vias and pads of the same ground net whose drill walls lie within `--distance` of its own in a straight line get no forced via of their own. They are reported as unfixable with "relies on forced via at (x, y)" and get a circle marker, because a via placed by hand in place of the forced one may serve them too. After moving a forced via, refill the zones, run `returnvia --check` to confirm its return, and run KiCad's DRC to confirm its clearance.
 
-Via ends outside every ground zone, or with no ground fill near the via, are never forced.
+Via and pad ends outside every ground zone, or with no ground fill nearby, are never forced.
 
 ## Stackup assumption
 

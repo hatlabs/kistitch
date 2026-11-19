@@ -1,5 +1,6 @@
 """The `returnvia` command: plan, verify and commit, then measure, render
-and overlay the return distance under the copper of each via end layer."""
+and overlay the return distance under the copper of each via or pad end
+layer."""
 
 from __future__ import annotations
 
@@ -32,14 +33,13 @@ from kistitch.returnpath import (
     ReturnFields,
 )
 from kistitch.returnvia import (
-    ReferencePlane,
+    ChangeReferences,
     ReturnViaOptions,
-    ViaReferences,
+    change_references,
     reference_outlines,
-    via_references,
 )
 from kistitch.returnvia_planner import ReturnViaPlanner
-from kistitch.snapshot import PadKind, Snapshot, Via
+from kistitch.snapshot import Snapshot, Via
 
 COMMAND = "returnvia"
 OVERLAY_COMMIT = "kistitch returnvia overlay"
@@ -54,7 +54,7 @@ UNREACHABLE_COLOUR = "#b44dff"
 # Pink stands out on both ends of the palette and on the board.
 RING_COLOUR = "#ff2a6d"
 COPPER_MAP_NET = "copper"
-SERVED_TITLE = "Return vias: every via end served within {distance:g} mm"
+SERVED_TITLE = "Return vias: every via and pad end served within {distance:g} mm"
 # Whole steps per threshold, so the step at the threshold falls between two.
 PALETTE_STEPS_PER_DISTANCE = 256
 THRESHOLD = 1 / SCALE
@@ -76,8 +76,8 @@ PALETTE = matplotlib.colors.LinearSegmentedColormap.from_list(
 STYLE = render.HeatmapStyle(
     title=(
         "Return vias: copper coloured by the distance to the nearest ground "
-        "return through its reference plane; pink ring = unserved via end, yellow "
-        "to dark blue = beyond the distance, purple = no path to a return"
+        "return through its reference plane; pink ring = unserved via or pad end, "
+        "yellow to dark blue = beyond the distance, purple = no path to a return"
     ),
     colourbar_label=(
         "distance to nearest return through the plane (mm); "
@@ -112,7 +112,7 @@ def layer_copper(
 ) -> BaseGeometry:
     """Every net's tracks, pads and zone fills on `layer`, and the ground vias:
     a via placed anywhere in that copper needs its own return, ground pour
-    included. Other vias show only where they have a measured end."""
+    included. Signal vias show only where they have a measured end."""
     shapes = [t.geometry for t in snapshot.tracks if t.layer == layer]
     shapes += [p.shapes[layer] for p in snapshot.pads if layer in p.shapes]
     shapes += [
@@ -127,7 +127,7 @@ def layer_copper(
 def copper_map(fields: ReturnFields, layer: str, grounds: Sequence[str]) -> CoverageMap:
     """The return field of each pixel's reference plane, on `layer`'s copper.
 
-    A pixel's reference is chosen as for a via end there. Copper over a void
+    A pixel's reference is chosen as for a via or pad end there. Copper over a void
     in that plane has no return path, unless it is a return's own copper. Copper outside every other layer's
     ground outline has no reference plane to measure and is left blank, as
     on a two-layer board's ground layer.
@@ -145,9 +145,9 @@ def copper_map(fields: ReturnFields, layer: str, grounds: Sequence[str]) -> Cove
 
 
 def copper_maps(
-    fields: ReturnFields, references: Sequence[ViaReferences], grounds: Sequence[str]
+    fields: ReturnFields, references: Sequence[ChangeReferences], grounds: Sequence[str]
 ) -> list[CoverageMap]:
-    """One map per copper layer a non-exempt via end connects on."""
+    """One map per copper layer a non-exempt via or pad connects on."""
     layers = {c.layer for r in references if not r.exempt for c in r.layers}
     return [
         copper_map(fields, L, grounds)
@@ -172,56 +172,21 @@ class End:
 Shown = Callable[[Mapping[str, BaseGeometry]], bool] | None
 
 
-def via_ends(
+def measured_ends(
     results: Sequence[PlaneReturn], fields: ReturnFields, distance: float, shown: Shown
 ) -> list[End]:
-    """The measured via ends, each on the layers referencing its plane."""
-    diameters = {(v.position, v.net): v.diameter for v in fields.snapshot.vias}
+    """The measured via and pad ends, each on the layers referencing its plane."""
     out = []
     for r in results:
         if r.outcome is not Outcome.MEASURED:
             continue
         assert r.plane is not None
-        via = Point(r.position).buffer(diameters[(r.position, r.net)] / 2)
-        copper = {L: via for L in r.layers}
+        copper = {L: r.change.copper[L] for L in r.layers}
         if shown is not None and not shown(copper):
             continue
-        void = fields.void(r.position, r.plane, distance)
+        void = fields.void(r.change, r.plane, distance)
         assert void is not None
         out.append(End(r.net, copper, void, r.distance))
-    return out
-
-
-def pad_ends(
-    layers: Sequence[str],
-    fields: ReturnFields,
-    grounds: Sequence[str],
-    distance: float,
-    shown: Shown,
-) -> list[End]:
-    """Signal PTH pads on `layers`, one end per reference plane, measured as
-    a via end there would be. They are shown but never reported unserved."""
-    snap = fields.snapshot
-    outlines = {L: list(reference_outlines(snap, L, grounds)) for L in layers}
-    out = []
-    for p in snap.pads:
-        if p.kind is not PadKind.PTH or not p.net or p.net in grounds:
-            continue
-        at = Point(p.position)
-        by_plane: dict[ReferencePlane, dict[str, BaseGeometry]] = {}
-        for L in layers:
-            plane = next((pl for pl, o in outlines[L] if o.contains(at)), None)
-            if L in p.shapes and plane is not None:
-                by_plane.setdefault(plane, {})[L] = p.shapes[L]
-        for plane, copper in by_plane.items():
-            if shown is not None and not shown(copper):
-                continue
-            found = fields.distance_at(p.position, plane, distance)
-            if found is None:
-                continue
-            void = fields.void(p.position, plane, distance)
-            assert void is not None
-            out.append(End(p.net, copper, void, found))
     return out
 
 
@@ -284,28 +249,30 @@ def paint_ends(m: CoverageMap, fields: ReturnFields, ends: Sequence[End]) -> Non
 def markers(
     results: Sequence[PlaneReturn], maps: Sequence[CoverageMap], distance: float
 ) -> dict[render.MapKey, render.Markers]:
-    """Per map: a ring of radius `distance` around each via end
-    unserved on that layer, showing the reach its return needs."""
+    """Per map: a ring around each via or pad end unserved on that layer,
+    reaching `distance` past its drill wall: a return's drill wall inside
+    the ring can serve it."""
     rings: dict[str, list[render.Disc]] = {}
     for r in results:
         if not r.served:
             for layer in r.layers:
-                rings.setdefault(layer, []).append((r.position, distance))
+                rings.setdefault(layer, []).append(
+                    (r.position, distance + r.change.drill / 2)
+                )
     return {
         (m.net, m.layer): render.Markers(rings=tuple(rings.get(m.layer, ())))
         for m in maps
     }
 
 
-def unserved_markers(
-    results: Sequence[PlaneReturn], vias: Sequence[Via]
-) -> tuple[Marker, ...]:
-    """A circle at each via with an unserved end, where the heatmaps ring it,
-    sized as a placing run's unfixable markers so the via can't hide it."""
-    radii = {v.position: v.diameter / 2 for v in vias}
-    positions = dict.fromkeys(r.position for r in results if not r.served)
+def unserved_markers(results: Sequence[PlaneReturn]) -> tuple[Marker, ...]:
+    """A circle at each via or pad with an unserved end, where the heatmaps
+    ring it, sized as a placing run's unfixable markers so its copper can't
+    hide it."""
+    changes = dict.fromkeys(r.change for r in results if not r.served)
     return tuple(
-        Marker(p, MarkerKind.UNFIXABLE, extent=radii.get(p, 0.0)) for p in positions
+        Marker(c.position, MarkerKind.UNFIXABLE, extent=c.circumscribed)
+        for c in changes
     )
 
 
@@ -315,7 +282,7 @@ def ring_maps(
     grid: Grid,
 ) -> list[CoverageMap]:
     """The maps cut to the copper inside their rings, which picks out the
-    unserved via ends; a map with no ring is dropped."""
+    unserved via and pad ends; a map with no ring is dropped."""
     out = []
     for m in maps:
         rings = marks[(m.net, m.layer)].rings
@@ -329,9 +296,9 @@ def ring_maps(
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class ReturnResult:
-    """Vias unserved within `distance` of all measured, after the run, with
-    the placement and its unfixable and forced vias unless the run only
-    measured. `full_map` is the heatmap view shown.
+    """Vias and pads unserved within `distance` of all measured, after the
+    run, with the placement and its unfixable and forced vias unless the run
+    only measured. `full_map` is the heatmap view shown.
 
     After a placement the figures are of the planned board: they hold once
     the placement landed (`placement.commit`).
@@ -349,13 +316,15 @@ class ReturnResult:
 
 
 def log_results(
-    references: Sequence[ViaReferences],
+    references: Sequence[ChangeReferences],
     results: Sequence[PlaneReturn],
     distance: float,
 ) -> tuple[int, int]:
-    """Log the measurement; returns the vias unserved and the vias measured."""
+    """Log the measurement; returns the vias and pads unserved and measured."""
     exempt = sum(r.exempt for r in references)
-    logger.info(f"  {exempt} vias exempt: connected to copper on fewer than two layers")
+    logger.info(
+        f"  {exempt} vias and pads exempt: connected to copper on fewer than two layers"
+    )
     unserved = [r for r in results if not r.served]
     for r in unserved:
         x, y = r.position
@@ -368,13 +337,13 @@ def log_results(
                 f"{where} on {r.plane.layer} ({r.plane.ground}): "
                 f"{r.distance:.2f} mm to a return"
             )
-    vias = {(r.position, r.net) for r in results}
-    failing = {(r.position, r.net) for r in unserved}
+    measured = {r.change for r in results}
+    failing = {r.change for r in unserved}
     logger.info(
-        f"{COMMAND}: {len(failing)} of {len(vias)} vias unserved within "
-        f"{distance:g} mm; {len(unserved)} of {len(results)} via-plane returns"
+        f"{COMMAND}: {len(failing)} of {len(measured)} vias and pads unserved "
+        f"within {distance:g} mm; {len(unserved)} of {len(results)} plane returns"
     )
-    return len(failing), len(vias)
+    return len(failing), len(measured)
 
 
 def execute(
@@ -394,9 +363,9 @@ def execute(
 
     `check` only measures the existing returns: no planning, no kicad-cli,
     no vias. With overlays, it replaces the markers with a circle at each
-    unserved via in the overlay commit. Planned vias count as returns in
-    the measurement, except forced ones. The heatmaps show only the copper
-    around unserved via ends, or with `full_map` all copper. Overlays are
+    unserved via or pad in the overlay commit. Planned vias count as returns
+    in the measurement, except forced ones. The heatmaps show only the copper
+    around unserved via and pad ends, or with `full_map` all copper. Overlays are
     placed in their own commit, also in a dry run. A run stops on request
     up to its overlay commit, or up to its via commit once it attempts one.
     """
@@ -432,7 +401,7 @@ def execute(
     after.enter(Stage.MEASURE)
     grounds = planner.grounds(snapshot, options)
     fields = ReturnFields(with_returns(snapshot, plan.units))
-    references = via_references(fields.snapshot, grounds)
+    references = change_references(fields.snapshot, grounds)
     results = fields.measure(references, options.distance)
     logger.info(f"{COMMAND} returns" + (" (check only)" if check else ""))
     unserved, total = log_results(references, results, options.distance)
@@ -440,18 +409,15 @@ def execute(
     maps = copper_maps(fields, references, grounds)
     marks = markers(results, maps, options.distance)
     shown = None if full_map else near_rings(marks, options.distance)
-    ends = [
-        *pad_ends([m.layer for m in maps], fields, grounds, options.distance, shown),
-        *via_ends(results, fields, options.distance, shown),
-    ]
+    ends = measured_ends(results, fields, options.distance, shown)
     for m in maps:
         paint_ends(m, fields, ends)
     if not maps:
-        logger.info("No signal via changes layers: no heatmaps")
+        logger.info("No signal via or pad changes layers: no heatmaps")
     elif not full_map:
         maps = ring_maps(maps, marks, fields.grid)
         if not maps:
-            logger.info("No unserved via ends: no heatmaps")
+            logger.info("No unserved via or pad ends: no heatmaps")
     if outputs.render is not None or outputs.overlay:
         after.enter(Stage.DRAW)
     if outputs.render is not None:
@@ -497,7 +463,7 @@ def execute(
             outputs,
             place,
             OVERLAY_COMMIT,
-            unserved_markers(results, snapshot.vias) if check else None,
+            unserved_markers(results) if check else None,
             after,
         )
     return ReturnResult(

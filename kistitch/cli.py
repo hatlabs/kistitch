@@ -262,14 +262,14 @@ def parse_args():
         help="Nets whose vias --vias removes (default: every net with a zone)",
     )
     returnvia_parser = subparsers.add_parser(
-        "returnvia", help="Place a ground return via near every signal via"
+        "returnvia", help="Place a ground return via near every signal via and PTH pad"
     )
     returnvia_parser.add_argument(
         "--distance",
         "-d",
         type=float,
         default=DEFAULT_DISTANCE,
-        help="Maximum distance from a via to its return via, in mm",
+        help="Maximum distance from a via's or pad's drill wall to its return's, in mm",
     )
     _add_ground_nets_argument(returnvia_parser)
     returnvia_parser.add_argument(
@@ -289,7 +289,7 @@ def parse_args():
     returnvia_parser.add_argument(
         "--full-map",
         action="store_true",
-        help="Map all copper, not only the copper around unserved via ends",
+        help="Map all copper, not only the copper around unserved via and pad ends",
     )
     returnvia_parser.add_argument(
         "--kicad-cli", metavar="PATH", help="kicad-cli binary used for DRC"
