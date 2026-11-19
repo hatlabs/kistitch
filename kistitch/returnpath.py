@@ -93,10 +93,7 @@ class PlaneReturn:
         match self.outcome:
             case Outcome.NO_GROUND_FILL:
                 assert self.plane is not None
-                kind = "via" if self.change.is_disc else "pad"
-                return (
-                    f"no {self.plane.ground} fill at the {kind} on {self.plane.layer}"
-                )
+                return f"no {self.plane.ground} fill nearby on {self.plane.layer}"
             case Outcome.OUTSIDE_GROUND:
                 return f"{OUTSIDE_GROUND} for {self.layers[0]}"
         return None

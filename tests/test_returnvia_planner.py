@@ -241,7 +241,7 @@ def test_no_ground_fill_end_is_unfixable_and_never_planned():
     (u,) = result.units
     assert not u.forced
     assert [(s.position, s.reason, s.extent) for s in result.unfixable] == [
-        (SIG, "no GND fill at the via on In1.Cu", VIA_RADIUS)
+        (SIG, "no GND fill nearby on In1.Cu", VIA_RADIUS)
     ]
     after = {r.plane.layer: r for r in check(snap, result)}
     assert after["In1.Cu"].outcome is Outcome.NO_GROUND_FILL

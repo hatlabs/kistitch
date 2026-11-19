@@ -983,8 +983,8 @@ def test_no_ground_fill_line_is_debug(fakes, log, info_log):
 
     run(Board())
 
-    assert [m for m in log if "no GND fill at the via" in m]
-    assert not [m for m in info_log if "no GND fill at the via" in m]
+    assert [m for m in log if "no GND fill nearby" in m]
+    assert not [m for m in info_log if "no GND fill nearby" in m]
 
 
 def test_via_with_no_path_to_a_return_logs_an_infinite_distance(fakes, log):
@@ -1365,15 +1365,13 @@ def test_no_ground_fill_end_is_logged_and_ringed(fakes, log):
     run(Board(), overlay=True, full_map=True)
 
     (line,) = [m for m in log if "unserved:" in m]
-    assert line.rstrip().endswith(
-        "SIG at (5.000, 5.000): no GND fill at the via on In1.Cu"
-    )
+    assert line.rstrip().endswith("SIG at (5.000, 5.000): no GND fill nearby on In1.Cu")
     off_copper = (SIG[0], SIG[1] - DISTANCE)
     assert at(rgba(fakes, "F.Cu"), off_copper) == RING
     assert at(rgba(fakes, "B.Cu"), off_copper) != RING
 
 
-def test_no_ground_fill_at_a_pad_names_the_pad(fakes, log):
+def test_no_ground_fill_at_a_pad_is_logged(fakes, log):
     snap = pin_snapshot()
     far = box(16, 0, 20, 10)
     flush = snap.zones[0].fills["In2.Cu"]
@@ -1384,7 +1382,7 @@ def test_no_ground_fill_at_a_pad_names_the_pad(fakes, log):
 
     (line,) = [m for m in log if "unserved:" in m and "fill" in m]
     assert line.rstrip().endswith(
-        "SIG at (12.000, 5.000): no GND fill at the pad on In1.Cu"
+        "SIG at (12.000, 5.000): no GND fill nearby on In1.Cu"
     )
 
 

@@ -184,7 +184,7 @@ def test_no_fill_near_the_via_is_its_own_outcome():
     results = measure(snap)
     assert results["In1.Cu"].outcome is Outcome.NO_GROUND_FILL
     assert not results["In1.Cu"].served
-    assert results["In1.Cu"].reason == "no GND fill at the via on In1.Cu"
+    assert results["In1.Cu"].reason == "no GND fill nearby on In1.Cu"
     assert results["In2.Cu"].served
 
 

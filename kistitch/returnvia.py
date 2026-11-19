@@ -98,23 +98,13 @@ class LayerChange:
     copper: Mapping[str, BaseGeometry]
     inscribed: float
     circumscribed: float
-    # A via: `touches` tests its true circle, not the polygon in `copper`.
-    is_disc: bool = False
 
     @classmethod
     def of_via(cls, v: Via, layers: Iterable[str]) -> LayerChange:
         """A via, its disc on each of `layers`."""
         radius = v.diameter / 2
         disc = Point(v.position).buffer(radius)
-        return cls(
-            v.id,
-            v.net,
-            v.position,
-            dict.fromkeys(layers, disc),
-            radius,
-            radius,
-            is_disc=True,
-        )
+        return cls(v.id, v.net, v.position, dict.fromkeys(layers, disc), radius, radius)
 
     @classmethod
     def of_pad(cls, p: Pad) -> LayerChange:
@@ -135,11 +125,7 @@ class LayerChange:
         """Whether `geometry` lies within `reach` of the copper on `layer`."""
         if layer not in self.copper or geometry.is_empty:
             return False
-        if self.is_disc:
-            gap = geometry.distance(Point(self.position)) - self.inscribed
-        else:
-            gap = geometry.distance(self.copper[layer])
-        return gap <= reach + DISTANCE_EPSILON
+        return geometry.distance(self.copper[layer]) <= reach + DISTANCE_EPSILON
 
 
 @dataclass(frozen=True)
