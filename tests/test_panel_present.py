@@ -142,18 +142,26 @@ class TestStitchingStatus:
 
 
 class TestReturnViasStatus:
-    def test_heatmap_with_unserved_vias(self) -> None:
+    def test_heatmap_with_unserved_vias_and_pads(self) -> None:
         s = heatmap_summary(return_result(unserved=14))
 
         assert (s.icon, s.lines) == (
             Icon.WARNING,
-            ("14 of 230 vias unserved within 1.5 mm",),
+            ("14 of 230 vias and pads unserved within 1.5 mm",),
         )
 
-    def test_heatmap_with_every_via_served(self) -> None:
+    def test_heatmap_with_one_unserved_via_or_pad(self) -> None:
+        s = heatmap_summary(return_result(unserved=1, total=1))
+
+        assert s.lines == ("1 of 1 via or pad unserved within 1.5 mm",)
+
+    def test_heatmap_with_every_via_and_pad_served(self) -> None:
         s = heatmap_summary(return_result())
 
-        assert (s.icon, s.lines) == (Icon.DONE, ("All 230 vias served within 1.5 mm",))
+        assert (s.icon, s.lines) == (
+            Icon.DONE,
+            ("All 230 vias and pads served within 1.5 mm",),
+        )
 
     def test_place_with_unfixable_and_forced(self) -> None:
         s = placed(
@@ -164,13 +172,16 @@ class TestReturnViasStatus:
 
         assert (s.icon, s.lines) == (
             Icon.WARNING,
-            ("Placed 61 vias; 5 vias unfixable (circled); 2 forced",),
+            ("Placed 61 vias; 5 vias and pads unfixable (circled); 2 forced",),
         )
 
-    def test_place_serving_every_via(self) -> None:
+    def test_place_serving_every_via_and_pad(self) -> None:
         s = placed(return_result(placement=run_result(placed=61)))
 
-        assert (s.icon, s.lines) == (Icon.DONE, ("Placed 61 vias; every via served",))
+        assert (s.icon, s.lines) == (
+            Icon.DONE,
+            ("Placed 61 vias; every via and pad served",),
+        )
 
 
 class TestSource:
@@ -182,7 +193,7 @@ class TestSource:
 
     def test_return_vias_heatmap_names_its_view(self) -> None:
         assert source(Kind.HEATMAP, View.ALL_COPPER) == "Heatmap: all copper"
-        assert source(Kind.HEATMAP, View.UNSERVED) == "Heatmap: unserved vias"
+        assert source(Kind.HEATMAP, View.UNSERVED) == "Heatmap: unserved vias and pads"
 
 
 class TestOutcomes:

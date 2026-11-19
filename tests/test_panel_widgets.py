@@ -216,7 +216,7 @@ class TestLayout:
         menu = returns.menu()
         assert menu is not None
         views = [a.text() for a in menu.actions() if a.isCheckable()]
-        assert views == ["&Unserved vias", "&All copper"]
+        assert views == ["&Unserved vias and pads", "&All copper"]
         for step in (Step.POWER, Step.GROUND):
             assert isinstance(w.cards[step].heatmap, QPushButton)
 
@@ -820,7 +820,7 @@ class TestConnection:
         m.held.finish()
 
         assert m.window.cards[Step.RETURN].status.lines.text() == (
-            "Placed 61 vias; every via served"
+            "Placed 61 vias; every via and pad served"
         )
         assert not activity.try_row.isVisible()
 

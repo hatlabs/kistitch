@@ -124,7 +124,7 @@ COLUMN_GAP = 8
 VIA_HINT = "diameter/drill, e.g. 0.6/0.3"
 DISTANCE_TEXT = {
     Step.POWER: "through the copper",
-    Step.RETURN: "from a via to its return",
+    Step.RETURN: "from a via or pad to its return",
     Step.GROUND: "through the copper",
 }
 FORCE_TEXT = "Placeholder vias; DRC finds them to fix by hand"
@@ -135,7 +135,10 @@ REFILL_ON = (
 REFILL_OFF = "Off: steps use the fills as they are. Refill in KiCad (B) after edits."
 CONNECTOR = "┊ then adjust pads by hand"
 VIEWS = {
-    View.UNSERVED: ("&Unserved vias", "Copper around via ends without a return"),
+    View.UNSERVED: (
+        "&Unserved vias and pads",
+        "Copper around via and pad ends without a return",
+    ),
     View.ALL_COPPER: ("&All copper", "Return distance over all copper"),
 }
 CLEAR_TEXT = f"Markers on User.Eco2, kistitch heatmaps on {OVERLAY_LAYERS}"

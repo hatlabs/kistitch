@@ -950,7 +950,7 @@ class Controller:
 
     def heatmap(self, step: Step, view: View | None = None) -> bool:
         """Make `step`'s heatmap; return vias' in `view`, by default the
-        unserved vias."""
+        unserved vias and pads."""
         if step is Step.PAD_VIAS or not self.step_enabled(step):
             return False
         if step is Step.RETURN:

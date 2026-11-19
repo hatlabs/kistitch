@@ -55,7 +55,7 @@ class Kind(Enum):
 class View(Enum):
     """The return vias heatmap's view."""
 
-    UNSERVED = "unserved vias"
+    UNSERVED = "unserved vias and pads"
     ALL_COPPER = "all copper"
 
 
@@ -106,6 +106,11 @@ HeatmapResult = StitchResult | ReturnResult
 
 def counted(n: int, noun: str, plural: str | None = None) -> str:
     return f"{n} {noun if n == 1 else plural or noun + 's'}"
+
+
+def vias_and_pads(n: int) -> str:
+    """The signal vias and PTH pads `returnvia` measures, counted."""
+    return counted(n, "via or pad", "vias and pads")
 
 
 def area(mm2: float) -> str:
@@ -162,11 +167,11 @@ def place_summary(result: PlaceResult) -> Summary:
         case ReturnResult():
             forced = f"; {result.forced} forced" if result.forced else ""
             if result.unfixable:
-                line = f"{vias}; {counted(result.unfixable, 'via')} unfixable (circled)"
+                line = f"{vias}; {vias_and_pads(result.unfixable)} unfixable (circled)"
             elif result.unserved:
                 line = f"{vias}; {_unserved(result)}"
             else:
-                line = f"{vias}; every via served"
+                line = f"{vias}; every via and pad served"
             icon = (
                 Icon.WARNING
                 if result.unfixable or result.unserved or result.forced
@@ -177,7 +182,7 @@ def place_summary(result: PlaceResult) -> Summary:
 
 def _unserved(result: ReturnResult) -> str:
     return (
-        f"{result.unserved} of {counted(result.total, 'via')} unserved within "
+        f"{result.unserved} of {vias_and_pads(result.total)} unserved within "
         f"{result.distance:g} mm"
     )
 
@@ -210,7 +215,7 @@ def heatmap_summary(result: HeatmapResult) -> Summary:
                 Icon.DONE,
                 (
                     (
-                        f"All {counted(result.total, 'via')} served within "
+                        f"All {vias_and_pads(result.total)} served within "
                         f"{result.distance:g} mm"
                     ),
                 ),
