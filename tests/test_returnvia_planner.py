@@ -678,7 +678,7 @@ def test_force_reports_a_pin_whose_every_spot_overlaps_other_net_copper():
 
 def test_pin_outside_every_ground_zone_marks_the_whole_pad():
     outside = (35.0, 10.0)
-    snap = pin_board([pin(outside)])
+    snap = pin_board([pin(outside, shape=square(outside))])
     snap = replace(
         snap, zones=[gnd_zone(dict.fromkeys(INNER, flush()), outline=box(0, 0, 20, 20))]
     )
@@ -689,7 +689,7 @@ def test_pin_outside_every_ground_zone_marks_the_whole_pad():
     assert result.unfixable
     for s in result.unfixable:
         assert s.position == outside
-        assert s.extent == pytest.approx(PIN_RADIUS, rel=0.01)
+        assert s.extent == pytest.approx(math.hypot(PIN_RADIUS, PIN_RADIUS))
 
 
 def test_planned_run_leaves_only_the_unfixable_pins_unserved():
