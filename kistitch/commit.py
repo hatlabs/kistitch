@@ -23,7 +23,7 @@ from kipy.proto.common.commands.editor_commands_pb2 import (
     CreateItemsResponse,
     ItemStatusCode,
 )
-from kipy.util.board_layer import canonical_name
+from kipy.util.board_layer import canonical_name, is_copper_layer
 from kipy.util.proto import pack_any
 from kipy.wrapper import Wrapper
 from loguru import logger
@@ -180,6 +180,22 @@ class CreateItemsError(RuntimeError):
 
 class UnknownNetsError(ValueError):
     """Units name nets the board no longer has."""
+
+
+def enable_board_layers(
+    board: kipy.board.Board, layers: Sequence[BoardLayer.ValueType]
+) -> list[BoardLayer.ValueType]:
+    """Add `layers` to the board's enabled layers, outside the undo history;
+    returns those KiCad did not enable.
+
+    KiCad replaces the whole set and deletes the contents of any layer left
+    out, so every enabled non-copper layer is passed back unchanged.
+    """
+    kept = [L for L in board.get_enabled_layers() if not is_copper_layer(L)]
+    enabled = board.set_enabled_layers(
+        board.get_copper_layer_count(), kept + list(layers)
+    )
+    return [L for L in layers if L not in enabled]
 
 
 def create_checked(board: kipy.board.Board, items: Sequence[Wrapper]) -> list[Wrapper]:
