@@ -124,8 +124,8 @@ def execute(
     `check` only measures the existing stitching: no planning, no kicad-cli,
     no vias. With overlays, it removes the markers in the overlay commit,
     since the heatmap shows what they marked. Overlays are placed in their
-    own commit, also in a dry run. A run stops on request up to its
-    overlay commit, or up to its via commit once it attempts one.
+    own commit; a dry run only writes their PNGs. A run stops on request up
+    to its overlay commit, or up to its via commit once it attempts one.
     """
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
@@ -212,6 +212,7 @@ def execute(
             OVERLAY_COMMIT,
             () if check else None,
             after,
+            dry_run=dry_run,
         )
     return StitchResult(
         distance=options.max_distance,

@@ -1162,7 +1162,25 @@ def test_prepare_overlay_layers_in_dry_run_warns_without_enabling(log):
 
     assert ready == overlay.PreparedLayers(place=False, enabled=())
     assert board.set_calls == []
-    assert any("User.1" in m and "PNGs only" in m for m in log)
+    assert any("User.1" in m and "--dry-run enables them" in m for m in log)
+    assert not any("PNGs only" in m for m in log)
+
+
+def test_prepare_overlay_layers_in_dry_run_never_places(log):
+    # Whether any PNGs get written is known only once the heatmaps are.
+    board = LayersBoard(
+        enabled=(BL.BL_User_1, BL.BL_User_2, BL.BL_User_3, BL.BL_User_4)
+    )
+
+    ready = overlay.prepare_overlay_layers(
+        board,  # type: ignore[arg-type]
+        overlay.Outputs(overlay=True),
+        dry_run=True,
+    )
+
+    assert ready == overlay.PreparedLayers(place=False, enabled=())
+    assert board.set_calls == []
+    assert not any("PNGs only" in m for m in log)
 
 
 def test_prepare_overlay_layers_fails_when_kicad_does_not_enable_a_layer():
