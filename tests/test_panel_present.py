@@ -8,7 +8,12 @@ from panel_fakes import busy, return_result, run_result, stitch_result
 from kistitch import drc
 from kistitch.clear_command import Cleared
 from kistitch.clearvias import RemovableVias
-from kistitch.commit import CommitOutcome, CreateItemsError, UnknownNetsError
+from kistitch.commit import (
+    CommitOutcome,
+    CreateItemsError,
+    MarkerLayerError,
+    UnknownNetsError,
+)
 from kistitch.overlay import OverlayLayersError
 from kistitch.panel.present import (
     Icon,
@@ -430,6 +435,7 @@ class TestFailure:
             drc.DrcError("kicad-cli DRC failed (2)"),
             CreateItemsError("refused"),
             UnknownNetsError("Nets not on the board: VBUS"),
+            MarkerLayerError("KiCad did not enable User.Eco2"),
             BoardSwitchedError("b.kicad_pcb"),
             ApiError("refused"),
         ],
@@ -531,6 +537,16 @@ class TestFailure:
             ),
             (
                 OverlayLayersError("x"),
+                Kind.HEATMAP,
+                "Power stitching heatmap failed — nothing placed",
+            ),
+            (
+                MarkerLayerError("x"),
+                Kind.PLACE,
+                "Power stitching failed — nothing committed",
+            ),
+            (
+                MarkerLayerError("x"),
                 Kind.HEATMAP,
                 "Power stitching heatmap failed — nothing placed",
             ),

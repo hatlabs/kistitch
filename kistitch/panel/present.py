@@ -15,7 +15,12 @@ from kipy.errors import ConnectionError as KiCadConnectionError
 from kistitch import drc
 from kistitch.clear_command import Cleared
 from kistitch.clearvias import RemovableVias
-from kistitch.commit import CommitOutcome, CreateItemsError, UnknownNetsError
+from kistitch.commit import (
+    CommitOutcome,
+    CreateItemsError,
+    MarkerLayerError,
+    UnknownNetsError,
+)
 from kistitch.overlay import DEFAULT_OVERLAY_LAYERS, OverlayLayersError
 from kistitch.panel.probe import BoardSwitchedError, NoBoardError
 from kistitch.placement import BoardChangedError, RunResult, SplitError
@@ -437,6 +442,15 @@ def failure(error: BaseException, step: Step | None, kind: Kind) -> Outcome:
                 f"Heatmaps go on {OVERLAY_LAYERS}, one layer per copper layer, and "
                 "KiCad did not enable them all, or the board has more copper layers "
                 "than that. Enable them in Board Setup → Board Editor Layers.",
+                str(error),
+            )
+        case MarkerLayerError():
+            return Outcome(
+                Icon.ERROR,
+                failed,
+                "kistitch marks problem spots on User.Eco2, and KiCad did not "
+                "enable that layer. Enable it in Board Setup → Board Editor "
+                "Layers, then run again.",
                 str(error),
             )
         case SplitError():

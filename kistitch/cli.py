@@ -13,6 +13,7 @@ from loguru import logger
 
 import kistitch.overlay
 from kistitch import clear_command, clearvias
+from kistitch.commit import MarkerLayerError
 from kistitch.overlay import DEFAULT_OVERLAY_LAYERS
 from kistitch.padvia import PadviaOptions, PadviaPlanner
 from kistitch.placement import (
@@ -35,7 +36,12 @@ from kistitch.snapshot import (
 )
 
 # Placement failures that leave the board untouched and need no traceback.
-PLACEMENT_ERRORS = (SplitError, BoardChangedError, NoBoardOutlineError)
+PLACEMENT_ERRORS = (
+    SplitError,
+    BoardChangedError,
+    NoBoardOutlineError,
+    MarkerLayerError,
+)
 
 KICAD_BUSY_MESSAGE = (
     "KiCad is busy, most likely with a tool or dialog open in the PCB editor; "
