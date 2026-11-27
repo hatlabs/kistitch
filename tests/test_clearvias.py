@@ -331,11 +331,21 @@ def test_clear_vias_nets_limit_the_removal(monkeypatch):
 def test_clear_vias_dry_run_removes_nothing_and_reports_per_net(monkeypatch, log):
     board = clear(monkeypatch, snapshot(TWO_GND_ONE_POWER), ["-n", "clear", "--vias"])
 
-    assert "refill_zones" not in board.calls
+    assert board.calls == ["snapshot", "snapshot"]
     assert sum(DRY_RUN_REFILL_MESSAGE in m for m in log) == 1
-    assert "push_commit" not in board.calls
-    assert board.calls[-1] == "drop_commit"
     assert any("Would remove stitching vias: 2 on GND, 1 on +3.3V" in m for m in log)
+    assert any(
+        "Dry run: would remove 0 shapes" in m and "3 stitching vias" in m for m in log
+    )
+
+
+def test_clear_dry_run_leaves_the_markers(monkeypatch, log):
+    marker = eco2_segment((1, 1), (2, 2))
+
+    board = clear(monkeypatch, snapshot(()), ["-n", "clear"], shapes=[marker])
+
+    assert board.calls == []
+    assert any("Dry run: would remove 1 shapes on User.Eco2" in m for m in log)
 
 
 def test_clear_without_vias_leaves_vias_and_zones_alone(monkeypatch, log):
@@ -547,8 +557,7 @@ def test_dry_run_removal_reports_nothing_removed(monkeypatch):
 
     assert cleared == clear_command.Cleared(vias=0, commit=CommitOutcome.NOTHING)
     assert found.total == 3
-    assert sorted(removed_ids(board)) == sorted(v.id for v in TWO_GND_ONE_POWER)
-    assert board.calls[-1] == "drop_commit"
+    assert board.calls == ["refill_zones", "snapshot", "snapshot"]
 
 
 def test_nothing_to_clear_reports_nothing(monkeypatch):

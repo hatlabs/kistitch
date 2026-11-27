@@ -47,8 +47,8 @@ def clear(
 ) -> Cleared:
     """Remove the markers, kistitch's overlays and, of `vias`, those that
     are still stitching vias, in one commit; then refill the zones if `refill`,
-    vias were removed and the commit is known to have landed. A stop is
-    honoured up to the commit."""
+    vias were removed and the commit is known to have landed. A dry run only
+    logs what it would remove. A stop is honoured up to the commit."""
     progress.enter(Stage.READ)
     shapes = board.get_shapes()
     eco2_shapes = marker_shapes(shapes)
@@ -64,12 +64,16 @@ def clear(
         logger.info("Nothing to clear")
         return Cleared(vias=0, commit=CommitOutcome.NOTHING)
 
+    if dry_run:
+        logger.info(
+            f"Dry run: would remove {len(eco2_shapes)} shapes on User.Eco2, "
+            f"{len(images)} overlay images and {len(removed)} stitching vias; "
+            "nothing committed"
+        )
+        return Cleared(vias=0, commit=CommitOutcome.NOTHING)
     progress.enter(Stage.COMMIT)
     commit = board.begin_commit()
     board.remove_items([*eco2_shapes, *images, *removed])
-    if dry_run:
-        board.drop_commit(commit)
-        return Cleared(vias=0, commit=CommitOutcome.NOTHING)
     if not push_tolerant(board, commit, commit_label("clear")):
         if removed and refill:
             logger.warning(UNKNOWN_PUSH_REFILL_MESSAGE)
