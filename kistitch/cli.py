@@ -312,7 +312,9 @@ def execute_clear(args):
     kicad = kipy.KiCad()
     board = kicad.get_board()
     vias = (
-        clearvias.find_removable_vias(kicad, board, args.nets, args.refill)
+        clearvias.find_removable_vias(
+            kicad, board, args.nets, args.refill, dry_run=args.dry_run
+        )
         if args.vias
         else None
     )

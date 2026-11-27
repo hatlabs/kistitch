@@ -10,7 +10,7 @@ import kipy
 import kipy.board
 from loguru import logger
 
-from kistitch.commit import REFILLS_OFF_MESSAGE, refill_tolerant
+from kistitch.commit import refill_before_read
 from kistitch.returnvia import LayerChange, filled_layers, tied_layers
 from kistitch.snapshot import Snapshot, Via
 
@@ -51,18 +51,14 @@ def find_removable_vias(
     board: kipy.board.Board,
     nets: Sequence[str] | None = None,
     refill: bool = True,
+    *,
+    dry_run: bool = False,
 ) -> RemovableVias:
     """Count the stitching vias on `nets`, or on every net, after refilling
-    the zones if `refill`. Changes nothing but the fills."""
+    the zones if `refill` and not `dry_run`. Changes nothing but the fills."""
     # Stitching vias are picked by the fills they touch, so stale fills
     # would pick the wrong ones.
-    refilled = False
-    if not refill:
-        logger.info(REFILLS_OFF_MESSAGE)
-    elif refill_tolerant(kicad, board):
-        refilled = True
-    else:
-        logger.warning("Zone refill not confirmed; fills may be stale")
+    refilled = refill_before_read(kicad, board, refill, dry_run=dry_run)
     snapshot = Snapshot.from_board(board)
     unfilled = _unfilled_zones(snapshot, nets)
     _warn_unclearable_nets(snapshot, nets, unfilled, refilled)
