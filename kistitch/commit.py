@@ -182,6 +182,10 @@ class UnknownNetsError(ValueError):
     """Units name nets the board no longer has."""
 
 
+class MarkerLayerError(RuntimeError):
+    """KiCad did not enable the marker layer."""
+
+
 def enable_board_layers(
     board: kipy.board.Board, layers: Sequence[BoardLayer.ValueType]
 ) -> list[BoardLayer.ValueType]:
@@ -196,6 +200,21 @@ def enable_board_layers(
         board.get_copper_layer_count(), kept + list(layers)
     )
     return [L for L in layers if L not in enabled]
+
+
+def enable_marker_layer(board: kipy.board.Board) -> None:
+    """Enable User.Eco2 if the board lacks it: KiCad refuses items on a
+    disabled layer, which would drop the whole commit."""
+    if MARKER_LAYER in board.get_enabled_layers():
+        return
+    if enable_board_layers(board, [MARKER_LAYER]):
+        raise MarkerLayerError(
+            "KiCad did not enable User.Eco2, which holds kistitch's markers. "
+            "Enable it in Board Setup → Board Editor Layers"
+        )
+    logger.info(
+        "Enabled User.Eco2 for the markers; this is not in KiCad's undo history"
+    )
 
 
 def create_checked(board: kipy.board.Board, items: Sequence[Wrapper]) -> list[Wrapper]:
@@ -233,7 +252,8 @@ def commit_units(
 ) -> CommitOutcome:
     """Remove the stale markers and create the units plus the new Eco2 markers
     as one commit, then refill the zones if `refill` and the commit is known
-    to have landed. Neither stops on request.
+    to have landed. Neither stops on request. With markers, User.Eco2 is
+    enabled first if the board lacks it.
     """
     nets = {n.name: n for n in board.get_nets()}
     missing = sorted({u.net for u in units} - nets.keys())
@@ -244,6 +264,8 @@ def commit_units(
     }
     placed = unit_items(units, nets, layer_ids)
     label = commit_label(command)
+    if markers:
+        enable_marker_layer(board)
 
     commit = board.begin_commit()
     try:

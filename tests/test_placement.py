@@ -19,6 +19,7 @@ from kipy.proto.common.commands.editor_commands_pb2 import (
 )
 from kipy.proto.common.envelope_pb2 import ApiStatusCode
 from kipy.proto.common.types import DocumentSpecifier
+from kipy.util.board_layer import is_copper_layer
 from loguru import logger
 
 from kistitch import commit, drc, placement
@@ -36,6 +37,7 @@ BOARD_CHANGES = {
     "create_items",
     "push_commit",
     "remove_items",
+    "set_enabled_layers",
 }
 
 
@@ -61,7 +63,8 @@ def net(name):
 
 
 class FakeClient:
-    """Answers CreateItems the way KiCad does: one status per item."""
+    """Answers CreateItems the way KiCad does: one status per item, refusing
+    an item on a layer the board has not enabled."""
 
     def __init__(self, board):
         self.board = board
@@ -75,7 +78,10 @@ class FakeClient:
         for packed, item in zip(command.items, items):
             result = response.created_items.add()
             result.item.CopyFrom(packed)
-            if self.board.refuse(item):
+            layer = getattr(item, "layer", None)
+            if self.board.refuse(item) or (
+                layer is not None and layer not in self.board.enabled
+            ):
                 result.status.code = ItemStatusCode.ISC_INVALID_DATA
                 result.status.error_message = "no overlapping layers"
             else:
@@ -99,6 +105,9 @@ class RecordingBoard:
         self.shapes = []
         self.removed = []
         self.visible = [BL.BL_F_Cu, BL.BL_Edge_Cuts]
+        self.enabled = [BL.BL_F_Cu, BL.BL_B_Cu, BL.BL_Edge_Cuts, commit.MARKER_LAYER]
+        # Layers KiCad leaves disabled when asked to enable them.
+        self.refuse_enable: set = set()
 
     def __getattr__(self, attr):
         def record(*args, **kwargs):
@@ -144,6 +153,19 @@ class RecordingBoard:
     def set_visible_layers(self, layers):
         self.calls.append(("set_visible_layers", list(layers)))
         self.visible = list(layers)
+
+    def get_copper_layer_count(self):
+        return sum(is_copper_layer(L) for L in self.enabled)
+
+    def get_enabled_layers(self):
+        return list(self.enabled)
+
+    def set_enabled_layers(self, copper_layer_count, layers):
+        # KiCad replaces the whole set: a layer left out is disabled.
+        self.calls.append(("set_enabled_layers", copper_layer_count, list(layers)))
+        copper = [L for L in self.enabled if is_copper_layer(L)]
+        self.enabled = copper + [L for L in layers if L not in self.refuse_enable]
+        return list(self.enabled)
 
 
 class FakeKiCad:
@@ -720,6 +742,105 @@ def test_commit_creates_items_and_markers_in_one_commit():
     assert push[1].startswith("kistitch pourstitch ")
     assert board.calls.count("begin_commit") == 1
     assert created is CommitOutcome.LANDED
+
+
+def enabled_layer_changes(board):
+    return [
+        c for c in board.calls if isinstance(c, tuple) and c[0] == "set_enabled_layers"
+    ]
+
+
+def without_marker_layer(board):
+    board.enabled.remove(commit.MARKER_LAYER)
+    return board
+
+
+def test_commit_with_markers_enables_the_marker_layer_keeping_enabled_ones(log):
+    board = without_marker_layer(RecordingBoard())
+    kept = [L for L in board.enabled if not is_copper_layer(L)]
+
+    created = commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "returnvia",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    [change] = enabled_layer_changes(board)
+    _, count, layers = change
+    assert count == 2
+    assert sorted(layers) == sorted([*kept, commit.MARKER_LAYER])
+    assert board.calls.index(change) < board.calls.index("begin_commit")
+    assert board.calls.count("begin_commit") == 1
+    placed, marks = board.created
+    assert [type(i).__name__ for i in placed] == ["Via"]
+    assert marks and all(m.layer == commit.MARKER_LAYER for m in marks)
+    assert len(pushes(board)) == 1
+    assert created is CommitOutcome.LANDED
+    [line] = [m for m in log if "Enabled" in m]
+    assert "User.Eco2" in line and "undo" in line
+
+
+def test_commit_with_the_marker_layer_enabled_leaves_the_layers_alone():
+    board = RecordingBoard()
+
+    commit.commit_units(
+        FakeKiCad(board),
+        board,
+        "x",
+        [unit(1, 1)],
+        [Marker((9, 9), MarkerKind.UNFIXABLE)],
+    )
+
+    assert enabled_layer_changes(board) == []
+
+
+def test_commit_without_markers_leaves_the_layers_alone():
+    board = without_marker_layer(RecordingBoard())
+    (stale,) = commit.marker_items([Marker((7, 7), MarkerKind.UNFIXABLE)])
+
+    commit.commit_units(FakeKiCad(board), board, "x", [unit(1, 1)], [], [stale])
+
+    assert enabled_layer_changes(board) == []
+    assert len(pushes(board)) == 1
+
+
+def test_marker_layer_kicad_does_not_enable_fails_before_committing():
+    board = without_marker_layer(RecordingBoard())
+    board.refuse_enable = {commit.MARKER_LAYER}
+
+    with pytest.raises(commit.MarkerLayerError) as e:
+        commit.commit_units(
+            FakeKiCad(board),
+            board,
+            "x",
+            [unit(1, 1)],
+            [Marker((9, 9), MarkerKind.UNFIXABLE)],
+        )
+
+    assert "User.Eco2" in str(e.value)
+    assert "Board Setup → Board Editor Layers" in str(e.value)
+    assert "begin_commit" not in board.calls
+    assert board.created == []
+
+
+def test_run_with_unfixable_spots_on_a_board_without_the_marker_layer_commits(
+    saved_board,
+):
+    board, kicad = saved_board
+    without_marker_layer(board)
+    unfixable = (UnfixableSpot((3, 3), "GND", "no room"),)
+
+    result = placement.run_placement(
+        plan_at((1, 1), unfixable=unfixable), None, placement.RunSettings("t"), kicad
+    )
+
+    assert result.commit is CommitOutcome.LANDED
+    assert commit.MARKER_LAYER in board.enabled
+    placed, marks = board.created
+    assert len(placed) == 1 and marks
+    assert len(pushes(board)) == 1
 
 
 def test_commit_of_nets_gone_from_the_board_raises_before_committing():
