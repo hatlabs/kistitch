@@ -23,7 +23,7 @@ from panel_fakes import (
     stitch_result,
 )
 
-from kistitch import drc, pourstitch
+from kistitch import clearvias, commit, drc, pourstitch
 from kistitch.clear_command import Cleared
 from kistitch.clearvias import RemovableVias
 from kistitch.commit import CommitOutcome
@@ -56,7 +56,7 @@ from kistitch.panel.probe import (
 from kistitch.plan import StitchClass
 from kistitch.progress import Cancelled, Progress, Stage
 from kistitch.returnvia import DEFAULT_DISTANCE, ReturnViaOptions
-from kistitch.snapshot import ViaSize
+from kistitch.snapshot import Snapshot, ViaSize
 
 PROGRESS = Progress()
 OTHER = BoardId("/work/other/other.kicad_pcb", "other.kicad_pcb")
@@ -1775,6 +1775,36 @@ class TestRunJob:
         assert count[1]["args"][2:] == (("GND",), False)
         assert remove[1]["args"][3] is VIAS and remove[1]["refill"]
         assert cleared[0] == "clear" and len(cleared[1]["args"]) == 3
+
+    def test_jobs_leave_every_command_out_of_dry_run(self, calls) -> None:
+        # The panel has no dry run, so its runs refill and place overlays.
+        self.run(PadJob(PadviaOptions(), refill=True))
+        self.run(StitchJob(pourstitch.Options(), refill=True, heatmap=True))
+        self.run(ReturnJob(ReturnViaOptions(), refill=True, view=View.UNSERVED))
+        self.run(CountJob(("GND",), refill=True))
+        self.run(RemoveJob(VIAS, refill=True))
+
+        pad, stitch, ret, count, remove = (call for _, call in calls)
+        assert pad["args"][2].dry_run is False
+        assert not any("dry_run" in c for c in (stitch, ret, count, remove))
+        assert count["args"][2:] == (("GND",), True)
+
+    def test_counting_refills_before_it_reads_the_fills(self, monkeypatch) -> None:
+        refills: list[object] = []
+        monkeypatch.setattr(
+            commit,
+            "refill_tolerant",
+            lambda kicad, board, **_: refills.append(board),
+        )
+        monkeypatch.setattr(
+            clearvias.Snapshot,
+            "from_board",
+            staticmethod(lambda board: Snapshot(copper_layers=("F.Cu",))),
+        )
+
+        self.run(CountJob(("GND",), refill=True))
+
+        assert len(refills) == 1
 
 
 class TestLogCapture:
