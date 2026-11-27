@@ -34,6 +34,7 @@ from kistitch.commit import (
     Marker,
     create_checked,
     enable_board_layers,
+    enable_marker_layer,
     marker_items,
     marker_shapes,
     show_layers,
@@ -285,13 +286,16 @@ def place_overlays(
     removed; with nothing to remove either, nothing is committed. Other
     reference images on those layers are left alone. `markers`, unless None,
     replace every shape on the marker layer in the same commit. The layers
-    that gain images or markers are made visible. If KiCad refuses an item,
-    nothing changes and the log says where to place the PNGs by hand.
+    that gain images or markers are made visible, and User.Eco2 is enabled
+    first if markers need it. If KiCad refuses an item, nothing changes and
+    the log says where to place the PNGs by hand.
     """
     old = overlays_on(board, overlay_layers, placement)
     stale = marker_shapes(board.get_shapes()) if markers is not None else []
     if not images and not old and not stale and not markers:
         return True
+    if markers:
+        enable_marker_layer(board)
     commit = board.begin_commit()
     try:
         if old or stale:
