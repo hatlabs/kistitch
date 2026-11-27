@@ -1093,6 +1093,35 @@ def test_clear_removes_our_overlays_and_keeps_other_images(tmp_path, monkeypatch
     assert board.visibility_calls == []
 
 
+def test_clear_dry_run_reports_what_it_would_remove_and_changes_nothing(
+    monkeypatch, log
+):
+    bounds = (0.0, 0.0, 30.0, 20.0)
+    placement = overlay.board_placement(bounds)
+    ours = Existing(BL.BL_User_2, placement.centre, placement.scale)
+    board = ClearBoard(rectangle_outline(*bounds), [ours])
+    monkeypatch.setattr(
+        cli.kipy, "KiCad", lambda: type("K", (), {"get_board": lambda self: board})()
+    )
+
+    cli.execute_clear(
+        argparse.Namespace(
+            overlay_layers=list(overlay.DEFAULT_OVERLAY_LAYERS),
+            dry_run=True,
+            vias=False,
+            nets=None,
+            refill=True,
+        )
+    )
+
+    assert board.removed == []
+    assert board.visibility_calls == []
+    assert any(
+        "Dry run: would remove 1 shapes on User.Eco2, 1 overlay images" in m
+        for m in log
+    )
+
+
 def test_prepare_overlay_layers_enables_missing_layers_keeping_every_enabled_one(log):
     kept = (BL.BL_F_SilkS, BL.BL_Edge_Cuts, BL.BL_User_2)
     board = LayersBoard(enabled=kept)
@@ -1162,7 +1191,25 @@ def test_prepare_overlay_layers_in_dry_run_warns_without_enabling(log):
 
     assert ready == overlay.PreparedLayers(place=False, enabled=())
     assert board.set_calls == []
-    assert any("User.1" in m and "PNGs only" in m for m in log)
+    assert any("User.1" in m and "--dry-run enables them" in m for m in log)
+    assert not any("PNGs only" in m for m in log)
+
+
+def test_prepare_overlay_layers_in_dry_run_never_places(log):
+    # Whether any PNGs get written is known only once the heatmaps are.
+    board = LayersBoard(
+        enabled=(BL.BL_User_1, BL.BL_User_2, BL.BL_User_3, BL.BL_User_4)
+    )
+
+    ready = overlay.prepare_overlay_layers(
+        board,  # type: ignore[arg-type]
+        overlay.Outputs(overlay=True),
+        dry_run=True,
+    )
+
+    assert ready == overlay.PreparedLayers(place=False, enabled=())
+    assert board.set_calls == []
+    assert not any("PNGs only" in m for m in log)
 
 
 def test_prepare_overlay_layers_fails_when_kicad_does_not_enable_a_layer():

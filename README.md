@@ -131,7 +131,7 @@ kistitch returnvia
 kistitch pourstitch
 ```
 
-`--check --overlay` places a step's heatmap without placing vias, and `kistitch --dry-run <command>` plans and runs DRC without placing vias. A dry run still refills the zones and places its `--overlay` heatmap. [Command line](https://github.com/hatlabs/kistitch/blob/main/docs/cli.md) lists every option.
+`--check --overlay` places a step's heatmap without placing vias, and `kistitch --dry-run <command>` plans and runs DRC without placing vias. A dry run leaves the board as it was: it doesn't refill the zones, and `--overlay` only writes the heatmap images to files. [Command line](https://github.com/hatlabs/kistitch/blob/main/docs/cli.md) lists every option.
 
 ## Documentation
 

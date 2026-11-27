@@ -7,13 +7,13 @@ Both commands can show their result two ways:
 - `--render PATH` writes a figure to a file. The format follows the file's extension.
 - `--overlay` places one transparent image per copper layer on the board, lined up with the copper.
 
-Both work with a placing run, where the heatmap includes the vias the run planned, even in a dry run that places none, and with `--check`, where it measures the board as it is.
+Both work with a placing run, where the heatmap includes the vias the run planned, even in a dry run that places none, and with `--check`, where it measures the board as it is. In a dry run, `--overlay` only writes the images to files (see [Dry runs](cli.md#dry-runs)).
 
 ## Check runs
 
 `returnvia --check` and `pourstitch --check` measure the existing vias only. They do no planning, run no DRC and place no vias. Combine them with `--render` or `--overlay` to see the current state.
 
-Every `--overlay` run commits its images, so it adds an undo step in KiCad. For repeated checks while you place vias by hand, use `--check --render` and keep the PNG open in an image viewer that reloads it. Its zone refill still adds an undo step, unless refills are off (see [Zone refills](cli.md#zone-refills)). Use `--overlay` for a one-off look on the board:
+Every `--overlay` run but a dry run commits its images, so it adds an undo step in KiCad. For repeated checks while you place vias by hand, use `--check --render` and keep the PNG open in an image viewer that reloads it. Its zone refill still adds an undo step, unless refills are off (see [Zone refills](cli.md#zone-refills)). Use `--overlay` for a one-off look on the board:
 
 ```bash
 kistitch returnvia --check --render returnvia.png
@@ -67,8 +67,8 @@ A pink ring marks each unserved via or pad end on its own layer. It reaches `--d
 
 The images go on User.1–User.4, one per copper layer in stack order, or on the layers given with `--overlay-layers`. A board with more copper layers than that needs `--overlay-layers` with one user layer per copper layer.
 
-A run enables any of those layers that are disabled and logs which ones. It makes the layers that get an image visible, keeping the other visible layers. Neither change is in KiCad's undo history. When one of the overlay layers is disabled, a dry run leaves it disabled and writes the images without placing any.
+A run enables any of those layers that are disabled and logs which ones. It makes the layers that get an image visible, keeping the other visible layers. Neither change is in KiCad's undo history. A dry run changes no layers and writes the images without placing any.
 
-The board stores the images itself. The PNGs are written to a temporary directory and removed once placed. When they can't be placed, as in a dry run with the layers disabled, they stay there and the log lists their paths and placements, for placing by hand.
+The board stores the images itself. The PNGs are written to a temporary directory and removed once placed. When they aren't placed, as in a dry run, they stay there and the log lists their paths and placements, for placing by hand.
 
 Toggle a layer's visibility to show or hide its heatmap. `kistitch clear` removes them (see [Clearing](clearing.md)). Both `clear` and a new `--overlay` run replace only kistitch's own overlays, also after the board outline has changed. They recognise them by a `kistitch` text chunk in the PNG, or the `breakneck` chunk of overlays placed under kistitch's former name. An image without either chunk is taken as an overlay of an earlier build when its centre and scale match the overlay placement for the current board outline, so a reference image of your own at exactly that placement is removed too. Other reference images on those layers stay.

@@ -366,8 +366,9 @@ def execute(
     unserved via or pad in the overlay commit. Planned vias count as returns
     in the measurement, except forced ones. The heatmaps show only the copper
     around unserved via and pad ends, or with `full_map` all copper. Overlays are
-    placed in their own commit, also in a dry run. A run stops on request
-    up to its overlay commit, or up to its via commit once it attempts one.
+    placed in their own commit; a dry run only writes their PNGs. A run stops
+    on request up to its overlay commit, or up to its via commit once it
+    attempts one.
     """
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
@@ -377,7 +378,7 @@ def execute(
     planner = ReturnViaPlanner(progress)
     result: RunResult | None = None
     if check:
-        snapshot, plan = measure_only(kicad, board, refill, progress)
+        snapshot, plan = measure_only(kicad, board, refill, progress, dry_run=dry_run)
     else:
         result = run_placement(
             planner,
@@ -465,6 +466,7 @@ def execute(
             OVERLAY_COMMIT,
             unserved_markers(results) if check else None,
             after,
+            dry_run=dry_run,
         )
     return ReturnResult(
         distance=options.distance,

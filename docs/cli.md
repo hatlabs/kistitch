@@ -21,7 +21,7 @@ These go before the command, as in `kistitch --dry-run returnvia`.
 
 | Option | Effect |
 |---|---|
-| `--dry-run`, `-n` | Do everything except commit the changes ([Dry runs](#dry-runs)). |
+| `--dry-run`, `-n` | Plan, measure and log what a run would do, without changing the board ([Dry runs](#dry-runs)). |
 | `--refill`, `--no-refill` | Refill the zones before measuring or placing, after committing, and before and after `clear --vias`. On by default ([Zone refills](#zone-refills)). |
 | `--version` | Print the version. |
 
@@ -77,7 +77,7 @@ The README's [Using it](../README.md#using-it) gives the reason for this order, 
 
 By default kistitch refills the zones:
 
-- before measuring or placing, so every run works from current fills;
+- before measuring or placing, so every run works from current fills, except a dry run ([Dry runs](#dry-runs));
 - before picking the vias for `clear --vias`;
 - after committing vias, or removing them with `clear --vias`, so the board is left filled.
 
@@ -87,16 +87,15 @@ Each refill adds an undo step in KiCad. Undoing a placement takes two Ctrl+Z: on
 
 ## Dry runs
 
-`kistitch --dry-run <command>` plans, runs the DRC check, logs what it would place and writes the `--render` output, but commits no vias or markers.
+`kistitch --dry-run <command>` plans, runs the DRC check, logs what it would place and writes the `--render` output. It leaves the board exactly as it was:
 
-Some things still happen in a dry run:
-
-- The zone refill before planning runs, unless refills are off.
-- `--overlay` still places its images. With `--check`, it also replaces every shape on User.Eco2, hand-drawn ones included, with the run's markers ([Check runs](heatmaps.md#check-runs)), enabling User.Eco2 for them if the board doesn't have it. Overlay layers that are disabled stay disabled, and the images are then only written to files ([Overlays on the board](heatmaps.md#overlays-on-the-board)).
+- It doesn't refill the zones. It plans and measures with the zone fills as they are and logs that once. On a board with stale fills, its result can differ from a real run's; refill in KiCad (press B) first for a matching result.
+- It commits no vias, markers or overlays, and enables or shows no layers. `--overlay` writes its images to files and logs their paths and where they would go ([Overlays on the board](heatmaps.md#overlays-on-the-board)). It also logs how many earlier overlay images a real run would remove.
+- It logs how many shapes on User.Eco2 a real run would remove, your own included, wherever that run replaces the markers: a placing run, or `--check --overlay`.
 
 The heatmaps of a dry run include the planned vias. For `returnvia` they count as returns, except forced ones, so a dry run shows which via and pad ends the run would leave unserved.
 
-A dry run of `clear --vias` refills, then logs how many vias per net would go, and removes nothing.
+A dry run of `clear` logs how many markers and overlay images it would remove, and with `--vias` how many vias per net, and removes nothing.
 
 ## When KiCad is busy
 

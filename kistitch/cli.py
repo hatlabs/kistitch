@@ -207,15 +207,16 @@ def parse_args():
         "--dry-run",
         "-n",
         action="store_true",
-        help="Do everything except commit the changes",
+        help="Plan, measure and log what a run would do, without changing the board",
     )
     parser.add_argument(
         "--refill",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Refill the zones before measuring or placing, after committing, "
-        "and before and after clear --vias (on by default). Each refill adds "
-        "an undo step in KiCad; with --no-refill, the fills are used as they are",
+        "and before and after clear --vias (on by default, except in a dry run). "
+        "Each refill adds an undo step in KiCad; with --no-refill, the fills "
+        "are used as they are",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -312,7 +313,9 @@ def execute_clear(args):
     kicad = kipy.KiCad()
     board = kicad.get_board()
     vias = (
-        clearvias.find_removable_vias(kicad, board, args.nets, args.refill)
+        clearvias.find_removable_vias(
+            kicad, board, args.nets, args.refill, dry_run=args.dry_run
+        )
         if args.vias
         else None
     )

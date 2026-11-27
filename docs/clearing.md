@@ -29,7 +29,7 @@ Vias in pads, fanout vias at the end of a track and locked vias stay.
 
 Vias are picked by the fills they touch, so the fills must be current. Unless refills are off, `clear --vias` refills the zones before picking the vias, and again after removing them. The removal, together with the markers and overlays, is one undo step. A selected zone with no fill can't be judged: vias that touch only that zone stay, and the run warns about it.
 
-With `--dry-run`, it still refills first, then logs how many vias per net would go, and removes nothing.
+With `--dry-run`, it doesn't refill: it picks the vias by the fills as they are, logs how many vias per net would go, and removes nothing.
 
 ## Restoring a board after clearing
 

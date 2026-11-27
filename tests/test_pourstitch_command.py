@@ -11,6 +11,7 @@ from shapely.geometry import box
 
 from kistitch import cli, drc, overlay, pourstitch_command, render
 from kistitch.commit import (
+    DRY_RUN_REFILL_MESSAGE,
     MARKER_LAYER,
     REFILLS_OFF_MESSAGE,
     CommitOutcome,
@@ -39,8 +40,11 @@ def snapshot() -> Snapshot:
 
 
 class Board:
-    def __init__(self, enabled=(BL.BL_User_1, BL.BL_User_2), shapes=(), outline=POUR):
+    def __init__(
+        self, enabled=(BL.BL_User_1, BL.BL_User_2), shapes=(), outline=POUR, images=()
+    ):
         self.calls: list = []
+        self.images = list(images)
         self.enabled = [BL.BL_F_Cu, BL.BL_B_Cu, *enabled]
         self.shapes = list(shapes)
         self.outline = outline
@@ -65,7 +69,7 @@ class Board:
         return self.enabled
 
     def get_reference_images(self):
-        return []
+        return self.images
 
     def get_shapes(self):
         if self.outline is None:
@@ -257,6 +261,23 @@ def test_check_without_overlay_leaves_the_markers(fakes, tmp_path: Path):
     assert board.calls == ["refill_zones"]
 
 
+def test_check_dry_run_renders_from_the_fills_as_they_are(fakes, tmp_path, log):
+    board = Board()
+    outputs = overlay.Outputs(render=tmp_path / "heat.png")
+
+    pourstitch_command.execute(
+        OPTIONS,
+        outputs,
+        check=True,
+        dry_run=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
+
+    assert (tmp_path / "heat.png").exists()
+    assert board.calls == []
+    assert sum(DRY_RUN_REFILL_MESSAGE in m for m in log) == 1
+
+
 def test_check_with_overlay_not_placed_leaves_the_markers(fakes, png_dir):
     board = Board(enabled=(), shapes=[eco2_segment((1.0, 1.0), (2.0, 2.0))])
     outputs = overlay.Outputs(overlay=True)
@@ -269,7 +290,7 @@ def test_check_with_overlay_not_placed_leaves_the_markers(fakes, png_dir):
         kicad=KiCad(board),  # type: ignore[arg-type]
     )
 
-    assert board.calls == ["refill_zones"]
+    assert board.calls == []
 
 
 def test_placing_run_overlay_leaves_the_markers_to_the_placement(fakes):
@@ -277,33 +298,68 @@ def test_placing_run_overlay_leaves_the_markers_to_the_placement(fakes):
     board = Board(shapes=[stale])
     outputs = overlay.Outputs(overlay=True)
 
-    pourstitch_command.execute(OPTIONS, outputs, dry_run=True, kicad=KiCad(board))  # type: ignore[arg-type]
+    pourstitch_command.execute(OPTIONS, outputs, kicad=KiCad(board))  # type: ignore[arg-type]
 
     assert board.removed == []
 
 
-def test_dry_run_still_places_overlay(fakes, tmp_path: Path):
+@pytest.mark.parametrize("check", [False, True])
+def test_dry_run_writes_the_overlays_only_to_files(
+    fakes, png_dir, tmp_path: Path, log, check
+):
     created, placements = fakes
-    board = Board()
+    board = Board(shapes=[eco2_segment((1.0, 1.0), (2.0, 2.0))])
     outputs = overlay.Outputs(overlay=True, render=tmp_path / "heat.png")
 
     result = pourstitch_command.execute(
         OPTIONS,
         outputs,
+        check=check,
         dry_run=True,
         kicad=KiCad(board),  # type: ignore[arg-type]
     )
 
-    assert result.placement is not None
-    assert result.placement.commit is CommitOutcome.NOTHING
-    assert result.overlays_placed
-    assert [s.dry_run for s in placements] == [True]
-    assert board.calls == [
-        "begin_commit",
-        ("push_commit", pourstitch_command.OVERLAY_COMMIT),
-    ]
-    assert len(created) == len(LAYERS)
+    assert (result.placement is None) is check
+    assert not result.overlays_placed
+    assert [s.dry_run for s in placements] == ([] if check else [True])
+    assert board.calls == []
+    assert board.removed == [] and created == []
+    assert board.visible == [BL.BL_F_Cu]
     assert (tmp_path / "heat.png").exists()
+    pngs = sorted(png_dir.glob("*.png"))
+    assert len(pngs) == len(LAYERS)
+    assert all(any(f"Overlay not placed: {p}" in m for m in log) for p in pngs)
+
+
+def test_check_overlay_dry_run_logs_what_a_real_run_would_remove(fakes, png_dir, log):
+    created, _ = fakes
+    pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        kicad=KiCad(Board()),  # type: ignore[arg-type]
+    )
+    previous = list(created)
+    assert previous
+    created.clear()
+    board = Board(images=previous, shapes=[eco2_segment((1.0, 1.0), (2.0, 2.0))])
+
+    pourstitch_command.execute(
+        OPTIONS,
+        overlay.Outputs(overlay=True),
+        check=True,
+        dry_run=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
+
+    assert board.calls == []
+    assert board.removed == [] and created == []
+    assert [m.rstrip() for m in log if "would remove" in m] == [
+        (
+            f"Dry run: a real run would remove {len(previous)} earlier overlay "
+            "images and all 1 shapes on User.Eco2"
+        )
+    ]
 
 
 def test_check_without_outline_fails_before_the_refill(fakes):

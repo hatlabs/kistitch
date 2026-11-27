@@ -16,6 +16,7 @@ from shapely.ops import unary_union
 
 from kistitch import cli, drc, overlay, pourstitch_command, render, returnvia_command
 from kistitch.commit import (
+    DRY_RUN_REFILL_MESSAGE,
     MARKER_LAYER,
     CommitOutcome,
     CreateItemsError,
@@ -924,9 +925,26 @@ def test_overlay_images_kicad_refuses_are_reported_not_placed(
     assert list(png_dir.glob("*.png"))
 
 
+def earlier_overlays(fakes) -> list:
+    """The overlay images a real run leaves on the board."""
+    snap = fakes.snap
+    fakes.snap = snapshot(returns=[("GND", (6.0, 5.0))])
+    run(Board(), overlay=True, full_map=True)
+    images = list(fakes.created)
+    assert images
+    fakes.created.clear()
+    fakes.snap = snap
+    return images
+
+
+def removal_lines(log: list[str]) -> list[str]:
+    return [m.rstrip() for m in log if "would remove" in m]
+
+
 def test_overlays_after_a_lost_placement_push_are_written_not_placed(
     fakes, monkeypatch, png_dir, log
 ):
+    previous = earlier_overlays(fakes)
     landed = returnvia_command.run_placement
     monkeypatch.setattr(
         returnvia_command,
@@ -936,7 +954,7 @@ def test_overlays_after_a_lost_placement_push_are_written_not_placed(
         ),
     )
     fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
-    board = Board()
+    board = Board(previous)
 
     result = run(board, check=False, full_map=True, overlay=True)
 
@@ -945,6 +963,8 @@ def test_overlays_after_a_lost_placement_push_are_written_not_placed(
     assert fakes.created == []
     assert list(png_dir.glob("*.png"))
     assert sum(overlay.LOST_PUSH_OVERLAY_MESSAGE in m for m in log) == 1
+    assert removal_lines(log) == []
+    assert not any(overlay.DRY_RUN_PNG_MESSAGE in m for m in log)
 
 
 def test_place_returns_the_placement_and_its_unfixable_and_forced_vias(fakes):
@@ -1135,7 +1155,7 @@ def test_without_a_ground_net_the_previous_set_stays(fakes):
     assert fakes.created == []
 
 
-def test_dry_run_overlay_shows_the_planned_vias(fakes, log):
+def test_dry_run_overlay_writes_the_planned_vias_only_to_files(fakes, png_dir, log):
     fakes.snap = snapshot()
     board = Board()
 
@@ -1143,15 +1163,14 @@ def test_dry_run_overlay_shows_the_planned_vias(fakes, log):
 
     assert result.placement is not None
     assert result.placement.commit is CommitOutcome.NOTHING
-    assert result.overlays_placed
+    assert not result.overlays_placed
     assert [s.dry_run for s in fakes.planned] == [True]
-    assert board.calls == [
-        "begin_commit",
-        ("push_commit", returnvia_command.OVERLAY_COMMIT),
-    ]
+    assert board.calls == []
+    assert fakes.created == []
     assert any("0 of 1 vias and pads unserved" in m for m in log)
-    assert fakes.created
-    image = rgba(fakes, "F.Cu")
+    png = png_dir / f"{STYLE.png_prefix}-F_Cu.png"
+    assert any(f"Overlay not placed: {png}" in m and "User.1" in m for m in log)
+    image = np.asarray(Image.open(png).convert("RGBA"))[: GRID.height, : GRID.width]
     # Without the planned via no copper reaches a return at all.
     unreachable = colour(STYLE.unreachable_colour)
     assert at(image, ON_TRACK)[3] == 255
@@ -1348,6 +1367,17 @@ def test_render_writes_the_panels(fakes, tmp_path):
     assert board.calls == ["refill_zones"]
 
 
+def test_check_dry_run_renders_from_the_fills_as_they_are(fakes, tmp_path, log):
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+    board = Board()
+
+    run(board, dry_run=True, render=tmp_path / "heat.png")
+
+    assert (tmp_path / "heat.png").exists()
+    assert board.calls == []
+    assert sum(DRY_RUN_REFILL_MESSAGE in m for m in log) == 1
+
+
 def test_render_panels_ring_the_unserved_end_on_its_layer(fakes, tmp_path):
     fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
 
@@ -1501,8 +1531,116 @@ def test_check_overlay_not_placed_leaves_the_markers(fakes, png_dir):
 
     run(board, overlay=True, dry_run=True)
 
-    assert board.calls == ["refill_zones"]
+    assert board.calls == []
     assert fakes.created == []
+
+
+def test_check_overlay_dry_run_leaves_the_board_alone(fakes, png_dir, tmp_path, log):
+    # Without User.Eco2 a real run would enable it for the markers.
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+    board = Board(enabled=USER, shapes=[old_marker()])
+
+    result = run(board, overlay=True, dry_run=True, render=tmp_path / "heat.png")
+
+    assert not result.overlays_placed
+    assert board.calls == []
+    assert board.removed == [] and fakes.created == []
+    assert board.visible == [BL.BL_F_Cu]
+    assert (tmp_path / "heat.png").exists()
+    pngs = sorted(png_dir.glob("*.png"))
+    assert pngs
+    assert all(any(f"Overlay not placed: {p}" in m for m in log) for p in pngs)
+
+
+def test_check_overlay_dry_run_logs_what_a_real_run_would_remove(fakes, png_dir, log):
+    previous = earlier_overlays(fakes)
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+    board = Board(previous, shapes=[old_marker(), old_marker()])
+
+    run(board, overlay=True, dry_run=True)
+
+    assert board.calls == []
+    assert board.removed == [] and fakes.created == []
+    assert removal_lines(log) == [
+        (
+            f"Dry run: a real run would remove {len(previous)} earlier overlay "
+            "images and all 2 shapes on User.Eco2"
+        )
+    ]
+    assert sum(overlay.DRY_RUN_PNG_MESSAGE in m for m in log) == 1
+
+
+def test_check_overlay_dry_run_without_earlier_overlays_logs_the_markers(
+    fakes, png_dir, log
+):
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+    board = Board(shapes=[old_marker(), old_marker()])
+
+    run(board, overlay=True, dry_run=True)
+
+    assert board.calls == [] and board.removed == []
+    assert removal_lines(log) == [
+        "Dry run: a real run would remove all 2 shapes on User.Eco2"
+    ]
+
+
+def test_placing_dry_run_overlay_log_leaves_the_markers_to_the_placement(
+    fakes, png_dir, log
+):
+    # The placement's own dry run logs the User.Eco2 removal (test_placement).
+    previous = earlier_overlays(fakes)
+    board = Board(previous, shapes=[old_marker()])
+
+    run(board, overlay=True, check=False, dry_run=True, full_map=True)
+
+    assert board.calls == []
+    assert removal_lines(log) == [
+        f"Dry run: a real run would remove {len(previous)} earlier overlay images"
+    ]
+
+
+def test_dry_run_without_heatmaps_logs_the_removal_and_writes_no_pngs(
+    fakes, png_dir, log
+):
+    previous = earlier_overlays(fakes)
+    fakes.snap = snapshot(signals=())
+    board = Board(previous)
+
+    run(board, overlay=True, dry_run=True)
+
+    assert board.calls == []
+    assert removal_lines(log) == [
+        f"Dry run: a real run would remove {len(previous)} earlier overlay images"
+    ]
+    assert not any(overlay.DRY_RUN_PNG_MESSAGE in m for m in log)
+
+
+def test_dry_run_writes_the_pngs_before_reading_the_board_for_the_removal(
+    fakes, png_dir, log
+):
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+    board = Board()
+
+    def busy():
+        raise RuntimeError("KiCad is busy")
+
+    board.get_reference_images = busy
+
+    with pytest.raises(RuntimeError, match="busy"):
+        run(board, overlay=True, dry_run=True)
+
+    pngs = sorted(png_dir.glob("*.png"))
+    assert pngs
+    assert all(any(f"Overlay not placed: {p}" in m for m in log) for p in pngs)
+
+
+def test_dry_run_with_nothing_to_remove_logs_no_removal(fakes, png_dir, log):
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+
+    run(Board(), overlay=True, dry_run=True)
+
+    assert removal_lines(log) == []
+    assert sum(overlay.DRY_RUN_PNG_MESSAGE in m for m in log) == 1
 
 
 def test_placing_run_overlay_leaves_the_markers_to_the_placement(fakes):
@@ -1510,7 +1648,7 @@ def test_placing_run_overlay_leaves_the_markers_to_the_placement(fakes):
     stale = old_marker()
     board = Board(shapes=[stale])
 
-    run(board, overlay=True, check=False, dry_run=True)
+    run(board, overlay=True, check=False)
 
     assert stale not in board.removed
     assert eco2_created(fakes) == []

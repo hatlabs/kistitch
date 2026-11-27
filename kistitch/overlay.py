@@ -35,6 +35,7 @@ from kistitch.commit import (
     create_checked,
     enable_board_layers,
     enable_marker_layer,
+    log_dry_run_removal,
     marker_items,
     marker_shapes,
     show_layers,
@@ -55,6 +56,7 @@ LOST_PUSH_OVERLAY_MESSAGE = (
     "Placement push not confirmed: overlays written, not placed; "
     "the previous overlays are still on the board"
 )
+DRY_RUN_PNG_MESSAGE = "Dry run: writing the overlay PNGs only, not placing them"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_CHUNK_HEADER = struct.Struct(">I4s")
 PNG_CRC_SIZE = 4
@@ -157,8 +159,9 @@ class PreparedLayers:
 def prepare_overlay_layers(
     board: kipy.board.Board, outputs: Outputs, dry_run: bool
 ) -> PreparedLayers:
-    """Whether overlays can go on the board, enabling missing overlay layers
-    unless `dry_run`. Without `outputs.overlay` nothing is placed or checked.
+    """Whether overlays can go on the board, enabling missing overlay layers.
+    Without `outputs.overlay` nothing is placed or checked. A dry run never
+    places them and enables nothing.
 
     Too few overlay layers for the copper count, or a name that is not a
     non-copper layer, raises before any board change. If KiCad refuses to
@@ -180,14 +183,15 @@ def prepare_overlay_layers(
             "layers such as User.1 to --overlay-layers"
         )
     missing = missing_layers(board, needed)
+    if dry_run:
+        if missing:
+            logger.warning(
+                f"Overlay layers not enabled on the board: {', '.join(missing)}. "
+                "A run without --dry-run enables them"
+            )
+        return PreparedLayers(place=False)
     if not missing:
         return PreparedLayers(place=True)
-    if dry_run:
-        logger.warning(
-            f"Overlay layers not enabled on the board: {', '.join(missing)}. A run "
-            "without --dry-run enables them; writing the PNGs only"
-        )
-        return PreparedLayers(place=False)
     enable_layers(board, missing)
     return PreparedLayers(place=True, enabled=tuple(missing))
 
@@ -271,6 +275,29 @@ def overlays_on(
     return [i for i in board.get_reference_images() if is_overlay(i, placement, layers)]
 
 
+def _replaced(
+    board: kipy.board.Board,
+    placement: ImagePlacement,
+    overlay_layers: Sequence[str],
+    markers: Sequence[Marker] | None,
+) -> tuple[list[kipy.board_types.ReferenceImage], list[kipy.board_types.BoardShape]]:
+    """What the overlay commit removes: kistitch's earlier overlays and, when
+    `markers` replace them, every shape on the marker layer. Only reads."""
+    old = overlays_on(board, overlay_layers, placement)
+    stale = marker_shapes(board.get_shapes()) if markers is not None else []
+    return old, stale
+
+
+def _log_dry_run_removal(
+    board: kipy.board.Board,
+    placement: ImagePlacement,
+    overlay_layers: Sequence[str],
+    markers: Sequence[Marker] | None,
+) -> None:
+    old, stale = _replaced(board, placement, overlay_layers, markers)
+    log_dry_run_removal(overlay_images=len(old), marker_layer_shapes=len(stale))
+
+
 def place_overlays(
     board: kipy.board.Board,
     images: Sequence[OverlayImage],
@@ -290,8 +317,7 @@ def place_overlays(
     first if markers need it. If KiCad refuses an item, nothing changes and
     the log says where to place the PNGs by hand.
     """
-    old = overlays_on(board, overlay_layers, placement)
-    stale = marker_shapes(board.get_shapes()) if markers is not None else []
+    old, stale = _replaced(board, placement, overlay_layers, markers)
     if not images and not old and not stale and not markers:
         return True
     if markers:
@@ -347,13 +373,16 @@ def show_overlays(
     commit_label: str,
     markers: Sequence[Marker] | None = None,
     progress: Progress = NO_PROGRESS,
+    *,
+    dry_run: bool = False,
 ) -> bool:
     """Write the per-copper-layer PNGs and place them as this run's overlay
     set, or log where they would go; True once the images are on the board.
     `write_pngs` None means no images: the previous set is only removed.
     `markers`, unless None, replace the marker layer's shapes in the overlay
     commit, so they change only if it lands. The overlay commit is entered
-    as `progress`'s commit stage.
+    as `progress`'s commit stage. A `dry_run` also logs what that commit
+    would remove; `place` is then False.
 
     The board embeds the image data, so the PNGs go to a temporary directory
     that is removed once they are placed. When they are not, they stay there
@@ -364,12 +393,16 @@ def show_overlays(
     bounds = snapshot.board_outline.bounds
     placement = board_placement(bounds)
     if write_pngs is None:
+        if dry_run:
+            _log_dry_run_removal(board, placement, outputs.overlay_layers, markers)
         if place:
             progress.enter(Stage.COMMIT)
             place_overlays(
                 board, [], placement, outputs.overlay_layers, commit_label, markers
             )
         return False
+    if dry_run:
+        logger.info(DRY_RUN_PNG_MESSAGE)
     out_dir = Path(tempfile.mkdtemp(prefix=PNG_DIR_PREFIX))
     try:
         pngs = write_pngs(out_dir)
@@ -397,4 +430,7 @@ def show_overlays(
     elif not place:
         for i in images:
             logger.info(f"Overlay not placed: {i.describe()}")
+    # After the PNGs, so a board read that fails still leaves them written.
+    if dry_run:
+        _log_dry_run_removal(board, placement, outputs.overlay_layers, markers)
     return placed

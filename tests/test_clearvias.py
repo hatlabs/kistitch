@@ -8,6 +8,7 @@ from shapely.geometry import LineString, box
 from kistitch import clear_command, clearvias, cli, commit
 from kistitch.clearvias import RemovableVias, stitching_vias
 from kistitch.commit import (
+    DRY_RUN_REFILL_MESSAGE,
     REFILLS_OFF_MESSAGE,
     UNKNOWN_PUSH_REFILL_MESSAGE,
     CommitOutcome,
@@ -330,10 +331,21 @@ def test_clear_vias_nets_limit_the_removal(monkeypatch):
 def test_clear_vias_dry_run_removes_nothing_and_reports_per_net(monkeypatch, log):
     board = clear(monkeypatch, snapshot(TWO_GND_ONE_POWER), ["-n", "clear", "--vias"])
 
-    assert board.calls[:2] == ["refill_zones", "snapshot"]
-    assert "push_commit" not in board.calls
-    assert board.calls[-1] == "drop_commit"
+    assert board.calls == ["snapshot", "snapshot"]
+    assert sum(DRY_RUN_REFILL_MESSAGE in m for m in log) == 1
     assert any("Would remove stitching vias: 2 on GND, 1 on +3.3V" in m for m in log)
+    assert any(
+        "Dry run: would remove 0 shapes" in m and "3 stitching vias" in m for m in log
+    )
+
+
+def test_clear_dry_run_leaves_the_markers(monkeypatch, log):
+    marker = eco2_segment((1, 1), (2, 2))
+
+    board = clear(monkeypatch, snapshot(()), ["-n", "clear"], shapes=[marker])
+
+    assert board.calls == []
+    assert any("Dry run: would remove 1 shapes on User.Eco2" in m for m in log)
 
 
 def test_clear_without_vias_leaves_vias_and_zones_alone(monkeypatch, log):
@@ -373,7 +385,7 @@ def test_clear_vias_dry_run_without_refills_does_not_refill(monkeypatch, log):
 def test_clear_vias_warns_and_goes_on_when_the_first_refill_is_unconfirmed(
     monkeypatch, log
 ):
-    monkeypatch.setattr(clearvias, "refill_tolerant", lambda kicad, board: False)
+    monkeypatch.setattr(commit, "refill_tolerant", lambda kicad, board, **_: False)
 
     board = clear(monkeypatch, snapshot(TWO_GND_ONE_POWER), ["clear", "--vias"])
 
@@ -425,6 +437,16 @@ def test_counting_reports_per_net_vias_and_unfilled_zones_and_changes_nothing(
     assert found.unfilled_zones == {"GND": 1}
     assert found.total == 3
     assert board.calls == ["refill_zones", "snapshot"]
+
+
+def test_counting_in_a_dry_run_uses_the_fills_as_they_are(monkeypatch, log):
+    board, kicad = library_board(monkeypatch, snapshot(TWO_GND_ONE_POWER))
+
+    found = clearvias.find_removable_vias(kicad, board, dry_run=True)  # type: ignore[arg-type]
+
+    assert found.total == 3
+    assert board.calls == ["snapshot"]
+    assert sum(DRY_RUN_REFILL_MESSAGE in m for m in log) == 1
 
 
 def test_removal_removes_exactly_the_counted_vias(monkeypatch):
@@ -535,8 +557,7 @@ def test_dry_run_removal_reports_nothing_removed(monkeypatch):
 
     assert cleared == clear_command.Cleared(vias=0, commit=CommitOutcome.NOTHING)
     assert found.total == 3
-    assert sorted(removed_ids(board)) == sorted(v.id for v in TWO_GND_ONE_POWER)
-    assert board.calls[-1] == "drop_commit"
+    assert board.calls == ["refill_zones", "snapshot", "snapshot"]
 
 
 def test_nothing_to_clear_reports_nothing(monkeypatch):
