@@ -513,7 +513,7 @@ def test_refill_reaches_the_heatmap_command_run_settings(
 def test_refill_reaches_the_check_measurement(monkeypatch, argv, module, flags, refill):
     seen: list[bool] = []
 
-    def capture(kicad, board, refill, progress):
+    def capture(kicad, board, refill, progress, *, dry_run):
         seen.append(refill)
         raise Captured
 

@@ -11,6 +11,7 @@ from shapely.geometry import box
 
 from kistitch import cli, drc, overlay, pourstitch_command, render
 from kistitch.commit import (
+    DRY_RUN_REFILL_MESSAGE,
     MARKER_LAYER,
     REFILLS_OFF_MESSAGE,
     CommitOutcome,
@@ -257,6 +258,23 @@ def test_check_without_overlay_leaves_the_markers(fakes, tmp_path: Path):
     assert board.calls == ["refill_zones"]
 
 
+def test_check_dry_run_renders_from_the_fills_as_they_are(fakes, tmp_path, log):
+    board = Board()
+    outputs = overlay.Outputs(render=tmp_path / "heat.png")
+
+    pourstitch_command.execute(
+        OPTIONS,
+        outputs,
+        check=True,
+        dry_run=True,
+        kicad=KiCad(board),  # type: ignore[arg-type]
+    )
+
+    assert (tmp_path / "heat.png").exists()
+    assert board.calls == []
+    assert sum(DRY_RUN_REFILL_MESSAGE in m for m in log) == 1
+
+
 def test_check_with_overlay_not_placed_leaves_the_markers(fakes, png_dir):
     board = Board(enabled=(), shapes=[eco2_segment((1.0, 1.0), (2.0, 2.0))])
     outputs = overlay.Outputs(overlay=True)
@@ -269,7 +287,7 @@ def test_check_with_overlay_not_placed_leaves_the_markers(fakes, png_dir):
         kicad=KiCad(board),  # type: ignore[arg-type]
     )
 
-    assert board.calls == ["refill_zones"]
+    assert board.calls == []
 
 
 def test_placing_run_overlay_leaves_the_markers_to_the_placement(fakes):

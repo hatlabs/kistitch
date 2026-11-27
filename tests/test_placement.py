@@ -22,7 +22,7 @@ from kipy.proto.common.types import DocumentSpecifier
 from kipy.util.board_layer import is_copper_layer
 from loguru import logger
 
-from kistitch import commit, drc, placement
+from kistitch import cli, commit, drc, placement
 from kistitch.commit import CommitOutcome, Marker, MarkerKind
 from kistitch.plan import Plan, PlannedUnit, Stub, UnfixableSpot
 from kistitch.progress import Cancelled, Stage
@@ -38,6 +38,7 @@ BOARD_CHANGES = {
     "push_commit",
     "remove_items",
     "set_enabled_layers",
+    "set_visible_layers",
 }
 
 
@@ -346,18 +347,45 @@ def test_run_commits_the_pruned_units_in_one_commit(saved_board):
     assert result.splits == 0
 
 
-def test_dry_run_commits_nothing(saved_board):
+def test_dry_run_makes_no_board_change(saved_board, log):
     board, kicad = saved_board
+    board.shapes = [eco2_cross()]
 
     result = placement.run_placement(
         plan_at((1, 1)), None, placement.RunSettings("test", dry_run=True), kicad
     )
 
     assert [u.position for u in result.prune.plan.units] == [(1, 1)]
-    assert "begin_commit" not in board.calls and pushes(board) == []
+    assert board_changes(board) == []
     assert board.created == []
     assert result.commit is CommitOutcome.NOTHING
     assert result.placed == 0
+    (line,) = [m for m in log if commit.DRY_RUN_REFILL_MESSAGE in m]
+    assert line.startswith("INFO")
+
+
+def test_regular_run_refills_before_the_snapshot(saved_board):
+    board, kicad = saved_board
+
+    placement.run_placement(plan_at((1, 1)), None, placement.RunSettings("test"), kicad)
+
+    assert board.calls[0] == "refill_zones"
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_padvia_from_the_cli_changes_the_board_only_without_dry_run(
+    saved_board, monkeypatch, dry_run
+):
+    board, kicad = saved_board
+    monkeypatch.setattr(placement.kipy, "KiCad", lambda: kicad)
+    monkeypatch.setattr(cli, "configure_logging", lambda: None)
+    monkeypatch.setattr(
+        sys, "argv", ["kistitch", *(["--dry-run"] if dry_run else []), "padvia"]
+    )
+
+    cli.main()
+
+    assert (board_changes(board) == []) is dry_run
 
 
 def test_empty_plan_without_markers_commits_nothing(saved_board):
@@ -445,9 +473,9 @@ def no_nets(snapshot, options, forbidden):
     raise ValueError("no nets")
 
 
-def test_dry_run_keeps_earlier_markers(saved_board):
+def test_dry_run_keeps_earlier_markers_and_logs_their_removal(saved_board, log):
     board, kicad = saved_board
-    board.shapes = [eco2_cross()]
+    board.shapes = [eco2_cross(), eco2_cross()]
 
     placement.run_placement(
         plan_at((1, 1)), None, placement.RunSettings("t", dry_run=True), kicad
@@ -455,6 +483,19 @@ def test_dry_run_keeps_earlier_markers(saved_board):
 
     assert board.removed == [] and "remove_items" not in board.calls
     assert "begin_commit" not in board.calls
+    assert [m.rstrip() for m in log if "would remove" in m] == [
+        "INFO Dry run: a real run would remove all 2 shapes on User.Eco2"
+    ]
+
+
+def test_dry_run_without_markers_logs_no_removal(saved_board, log):
+    _, kicad = saved_board
+
+    placement.run_placement(
+        plan_at((1, 1)), None, placement.RunSettings("t", dry_run=True), kicad
+    )
+
+    assert not any("would remove" in m for m in log)
 
 
 def test_run_with_nothing_to_place_and_no_markers_commits_nothing(saved_board):
@@ -485,7 +526,7 @@ def test_board_changed_after_an_unconfirmed_refill_names_the_refill(
 ):
     board, kicad = saved_board
     board.texts = ["(kicad_pcb)", "(kicad_pcb (refilled))"]
-    monkeypatch.setattr(placement, "refill_tolerant", lambda kicad, board, **_: False)
+    monkeypatch.setattr(commit, "refill_tolerant", lambda kicad, board, **_: False)
 
     with pytest.raises(placement.BoardChangedError, match="zone refill"):
         placement.run_placement(
@@ -1418,6 +1459,91 @@ def test_refill_stops_on_request_while_waiting_for_the_fill():
     assert len(kicad.pings) == 9  # one ping, then the stop
 
 
+# ---- refill before a run reads the board ----------------------------------------
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_refill_before_read_with_refills_off_uses_the_fills_as_they_are(
+    log, recorder, dry_run
+):
+    board = RefillBoard(None)
+    rec = recorder()
+
+    refilled = commit.refill_before_read(
+        FakeKiCad(None), board, False, dry_run=dry_run, progress=rec.progress
+    )
+
+    assert refilled is False
+    assert board.refills == 0
+    assert rec.stages() == []
+    (line,) = [m for m in log if commit.REFILLS_OFF_MESSAGE in m]
+    assert line.startswith("INFO")
+    assert not [m for m in log if commit.DRY_RUN_REFILL_MESSAGE in m]
+
+
+def test_refill_before_read_in_a_dry_run_uses_the_fills_as_they_are(log, recorder):
+    board = RefillBoard(None)
+    rec = recorder()
+
+    refilled = commit.refill_before_read(
+        FakeKiCad(None), board, True, dry_run=True, progress=rec.progress
+    )
+
+    assert refilled is False
+    assert board.refills == 0
+    assert rec.stages() == []
+    (line,) = [m for m in log if commit.DRY_RUN_REFILL_MESSAGE in m]
+    assert line.startswith("INFO")
+    assert not [m for m in log if commit.REFILLS_OFF_MESSAGE in m]
+
+
+def test_refill_before_read_refills_and_confirms(log, recorder):
+    board = RefillBoard(None)
+    rec = recorder()
+
+    refilled = commit.refill_before_read(
+        FakeKiCad(None), board, True, dry_run=False, progress=rec.progress
+    )
+
+    assert refilled is True
+    assert board.refills == 1
+    assert rec.stages() == [(Stage.REFILL, None)]
+    assert not [m for m in log if "refill" in m.lower()]
+
+
+def test_refill_before_read_warns_when_the_refill_is_not_confirmed(monkeypatch, log):
+    clock = FakeClock()
+    real_refill = commit.refill_tolerant
+    monkeypatch.setattr(
+        commit,
+        "refill_tolerant",
+        lambda k, b, **kw: real_refill(
+            k, b, timeout_s=1, poll_s=1, sleep=clock.sleep, clock=clock, **kw
+        ),
+    )
+
+    refilled = commit.refill_before_read(
+        FakeKiCad(None), RefillBoard(busy()), True, dry_run=False
+    )
+
+    assert refilled is False
+    (line,) = [m for m in log if "refill not confirmed" in m]
+    assert line.rstrip() == "WARNING Zone refill not confirmed; fills may be stale"
+
+
+def test_refill_before_read_stops_on_request_while_waiting_for_the_fill(recorder):
+    kicad = FakeKiCad(None)
+    kicad.pings = [busy()] * 10
+    rec = recorder(stop_at=Stage.REFILL)
+
+    with pytest.raises(Cancelled):
+        commit.refill_before_read(
+            kicad, RefillBoard(None), True, dry_run=False, progress=rec.progress
+        )
+
+    assert len(kicad.pings) == 10  # stopped before the first ping
+
+
 @pytest.mark.parametrize("refilled", [True, False])
 def test_measure_only_refills_and_snapshots_with_an_empty_plan(
     monkeypatch, log, refilled
@@ -1425,7 +1551,7 @@ def test_measure_only_refills_and_snapshots_with_an_empty_plan(
     board, kicad, snap = object(), object(), Snapshot(copper_layers=("F.Cu",))
     refills = []
     monkeypatch.setattr(
-        placement,
+        commit,
         "refill_tolerant",
         lambda k, b, **_: refills.append((k, b)) or refilled,
     )
@@ -1547,6 +1673,23 @@ def test_dry_run_without_refills_does_not_refill(saved_board, log):
     assert len(refills_off_lines(log)) == 1
 
 
+def test_measure_only_in_a_dry_run_uses_the_fills_as_they_are(monkeypatch, log):
+    board, kicad, snap = object(), object(), Snapshot(copper_layers=("F.Cu",))
+    monkeypatch.setattr(
+        commit,
+        "refill_tolerant",
+        lambda k, b, **_: pytest.fail("refilled in a dry run"),
+    )
+    monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda b: snap))
+
+    result = placement.measure_only(kicad, board, dry_run=True)  # type: ignore[arg-type]
+
+    assert result == (snap, Plan())
+    (line,) = [m for m in log if commit.DRY_RUN_REFILL_MESSAGE in m]
+    assert line.startswith("INFO")
+    assert not refills_off_lines(log)
+
+
 def test_board_changed_without_refills_does_not_blame_a_refill(saved_board):
     board, kicad = saved_board
     board.texts = ["(kicad_pcb)", "(kicad_pcb (edited))"]
@@ -1563,7 +1706,7 @@ def test_board_changed_without_refills_does_not_blame_a_refill(saved_board):
 def test_measure_only_without_refills_uses_the_fills_as_they_are(monkeypatch, log):
     board, kicad, snap = object(), object(), Snapshot(copper_layers=("F.Cu",))
     monkeypatch.setattr(
-        placement,
+        commit,
         "refill_tolerant",
         lambda k, b, **_: pytest.fail("refilled with refills off"),
     )
@@ -1740,7 +1883,7 @@ def test_committing_is_reported_after_the_last_stop_check_and_before_the_commit(
 
 def test_measure_only_reports_refill_and_read(monkeypatch, recorder):
     snap = Snapshot(copper_layers=("F.Cu",))
-    monkeypatch.setattr(placement, "refill_tolerant", lambda k, b, **_: True)
+    monkeypatch.setattr(commit, "refill_tolerant", lambda k, b, **_: True)
     monkeypatch.setattr(Snapshot, "from_board", staticmethod(lambda b: snap))
     rec = recorder()
 
@@ -1761,7 +1904,7 @@ def test_measure_only_without_refills_reports_only_read(monkeypatch, recorder):
 
 
 def test_measure_only_stopped_before_reading_cancels(monkeypatch, recorder):
-    monkeypatch.setattr(placement, "refill_tolerant", lambda k, b, **_: True)
+    monkeypatch.setattr(commit, "refill_tolerant", lambda k, b, **_: True)
     monkeypatch.setattr(
         Snapshot, "from_board", staticmethod(lambda b: pytest.fail("board read"))
     )
@@ -1784,7 +1927,7 @@ def refill_that_stops(refilled):
 
 def test_measure_only_stops_during_the_refill(monkeypatch, recorder):
     refilled = []
-    monkeypatch.setattr(placement, "refill_tolerant", refill_that_stops(refilled))
+    monkeypatch.setattr(commit, "refill_tolerant", refill_that_stops(refilled))
     rec = recorder(stop_at=Stage.REFILL)
 
     with pytest.raises(Cancelled):
@@ -1798,7 +1941,7 @@ def test_placement_stops_during_the_refill_before_reading(
 ):
     _, kicad = saved_board
     refilled = []
-    monkeypatch.setattr(placement, "refill_tolerant", refill_that_stops(refilled))
+    monkeypatch.setattr(commit, "refill_tolerant", refill_that_stops(refilled))
     rec = recorder(stop_at=Stage.REFILL)
 
     with pytest.raises(Cancelled):

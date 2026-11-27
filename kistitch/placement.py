@@ -14,13 +14,13 @@ from loguru import logger
 
 from kistitch import drc
 from kistitch.commit import (
-    REFILLS_OFF_MESSAGE,
     CommitOutcome,
     Marker,
     MarkerKind,
     commit_units,
+    log_dry_run_removal,
     marker_shapes,
-    refill_tolerant,
+    refill_before_read,
 )
 from kistitch.plan import Plan, Planner
 from kistitch.progress import NO_PROGRESS, Progress, Stage
@@ -82,15 +82,12 @@ def measure_only(
     board: kipy.board.Board,
     refill: bool = True,
     progress: Progress = NO_PROGRESS,
+    *,
+    dry_run: bool = False,
 ) -> tuple[Snapshot, Plan]:
-    """The board, refilled if `refill`, and an empty plan, for a run that
-    places nothing."""
-    if not refill:
-        logger.info(REFILLS_OFF_MESSAGE)
-    else:
-        progress.enter(Stage.REFILL)
-        if not refill_tolerant(kicad, board, check=progress.check):
-            logger.warning("Zone refill not confirmed; fills may be stale")
+    """The board, refilled if `refill` and not `dry_run`, and an empty plan,
+    for a run that places nothing."""
+    refill_before_read(kicad, board, refill, dry_run=dry_run, progress=progress)
     progress.enter(Stage.READ)
     return Snapshot.from_board(board), Plan()
 
@@ -163,10 +160,11 @@ def run_placement(
     """Run a planner against the open board.
 
     The board outline, kicad-cli and the project files are checked before
-    anything touches the board. Unless `settings.refill` is off, zones are
-    refilled before the snapshot even in a dry run, because stale fills would
-    drive the placement. A stop is honoured up to the commit; the commit
-    and the refill after it then run to completion.
+    anything touches the board. Unless `settings.refill` is off or the run
+    is a dry run, zones are refilled before the snapshot, because stale fills
+    would drive the placement; a dry run changes nothing on the board, so it
+    plans on the fills as they are. A stop is honoured up to the commit; the
+    commit and the refill after it then run to completion.
     """
     kicad = kicad or kipy.KiCad()
     board = kicad.get_board()
@@ -180,16 +178,9 @@ def run_placement(
         + (f", {project.dru}" if project.dru else " (no .kicad_dru)")
     )
 
-    unconfirmed_refill = False
-    if not settings.refill:
-        logger.info(REFILLS_OFF_MESSAGE)
-    else:
-        progress.enter(Stage.REFILL)
-        if not refill_tolerant(kicad, board, check=progress.check):
-            unconfirmed_refill = True
-            logger.warning(
-                "Zone refill not confirmed; fills in the snapshot may be stale"
-            )
+    refilled = refill_before_read(
+        kicad, board, settings.refill, dry_run=settings.dry_run, progress=progress
+    )
     progress.enter(Stage.READ)
     snapshot = Snapshot.from_board(board)
 
@@ -211,6 +202,7 @@ def run_placement(
     splits = _check_splits(result, settings, runner)
 
     if settings.dry_run:
+        log_dry_run_removal(marker_layer_shapes=len(marker_shapes(board.get_shapes())))
         logger.info("Dry run: nothing committed")
         return RunResult(snapshot, result, commit=CommitOutcome.NOTHING, splits=splits)
     # Each run's markers replace the previous run's, like overlays do.
@@ -225,7 +217,7 @@ def run_placement(
             "The board changed during the run; run again"
             + (
                 " (a zone refill still running from the start can also do this)"
-                if unconfirmed_refill
+                if settings.refill and not refilled
                 else ""
             )
         )

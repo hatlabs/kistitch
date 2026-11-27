@@ -16,6 +16,7 @@ from shapely.ops import unary_union
 
 from kistitch import cli, drc, overlay, pourstitch_command, render, returnvia_command
 from kistitch.commit import (
+    DRY_RUN_REFILL_MESSAGE,
     MARKER_LAYER,
     CommitOutcome,
     CreateItemsError,
@@ -1348,6 +1349,17 @@ def test_render_writes_the_panels(fakes, tmp_path):
     assert board.calls == ["refill_zones"]
 
 
+def test_check_dry_run_renders_from_the_fills_as_they_are(fakes, tmp_path, log):
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+    board = Board()
+
+    run(board, dry_run=True, render=tmp_path / "heat.png")
+
+    assert (tmp_path / "heat.png").exists()
+    assert board.calls == []
+    assert sum(DRY_RUN_REFILL_MESSAGE in m for m in log) == 1
+
+
 def test_render_panels_ring_the_unserved_end_on_its_layer(fakes, tmp_path):
     fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
 
@@ -1501,7 +1513,7 @@ def test_check_overlay_not_placed_leaves_the_markers(fakes, png_dir):
 
     run(board, overlay=True, dry_run=True)
 
-    assert board.calls == ["refill_zones"]
+    assert board.calls == []
     assert fakes.created == []
 
 

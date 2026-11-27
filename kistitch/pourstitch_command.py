@@ -135,7 +135,7 @@ def execute(
     stitcher = PourStitcher(progress)
     result: RunResult | None = None
     if check:
-        snapshot, plan = measure_only(kicad, board, refill, progress)
+        snapshot, plan = measure_only(kicad, board, refill, progress, dry_run=dry_run)
     else:
         result = run_placement(
             stitcher,

@@ -45,6 +45,11 @@ REFILLS_OFF_MESSAGE = (
     "Automatic zone refills are off: using the zone fills as they are; "
     "refill zones in KiCad (press B) before running kistitch"
 )
+DRY_RUN_REFILL_MESSAGE = (
+    "Dry run: zones not refilled, using the zone fills as they are; "
+    "a run without --dry-run refills them first, so its result can differ"
+)
+REFILL_UNCONFIRMED_MESSAGE = "Zone refill not confirmed; fills may be stale"
 # After an unknown push the refill is skipped: it would wait out its
 # deadline on a lost connection, and the commit usually landed anyway.
 UNKNOWN_PUSH_REFILL_MESSAGE = (
@@ -128,6 +133,17 @@ def marker_shapes(
 ) -> list[kipy.board_types.BoardShape]:
     """Every shape on the marker layer, whichever run or user drew it."""
     return [s for s in shapes if s.layer == MARKER_LAYER]
+
+
+def log_dry_run_removal(
+    *, overlay_images: int = 0, marker_layer_shapes: int = 0
+) -> None:
+    """Log what a real run's commit would remove, if anything."""
+    removed = [f"{overlay_images} earlier overlay images"] if overlay_images else []
+    if marker_layer_shapes:
+        removed.append(f"all {marker_layer_shapes} shapes on User.Eco2")
+    if removed:
+        logger.info("Dry run: a real run would remove " + " and ".join(removed))
 
 
 def marker_items(markers: Sequence[Marker]) -> list[kipy.board_types.BoardShape]:
@@ -356,6 +372,30 @@ def refill_after_commit(kicad: kipy.KiCad, board: kipy.board.Board) -> bool:
     if not refilled:
         logger.warning("Zone refill not confirmed; press B in KiCad to refill zones")
     return refilled
+
+
+def refill_before_read(
+    kicad: kipy.KiCad,
+    board: kipy.board.Board,
+    refill: bool,
+    *,
+    dry_run: bool,
+    progress: Progress = NO_PROGRESS,
+) -> bool:
+    """Refill zones before a run reads the board, unless `refill` is off or
+    the run is a dry run, which changes nothing; True once the refill is
+    confirmed. A stop is honoured up to and during the refill."""
+    if not refill:
+        logger.info(REFILLS_OFF_MESSAGE)
+        return False
+    if dry_run:
+        logger.info(DRY_RUN_REFILL_MESSAGE)
+        return False
+    progress.enter(Stage.REFILL)
+    if refill_tolerant(kicad, board, check=progress.check):
+        return True
+    logger.warning(REFILL_UNCONFIRMED_MESSAGE)
+    return False
 
 
 def _busy(e: Exception) -> bool:
