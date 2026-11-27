@@ -19,6 +19,7 @@ from kistitch import (
     returnvia_command,
 )
 from kistitch.cli import parse_via_size
+from kistitch.commit import MarkerLayerError
 from kistitch.plan import (
     POURSTITCH_GROUND_DISTANCE,
     POURSTITCH_POWER_DISTANCE,
@@ -60,7 +61,12 @@ def test_placement_commands_allow_splits_unless_told_not_to(
 
 
 @pytest.mark.parametrize(
-    "error", [NoBoardOutlineError("no outline"), placement.SplitError("split")]
+    "error",
+    [
+        NoBoardOutlineError("no outline"),
+        placement.SplitError("split"),
+        MarkerLayerError("Eco2"),
+    ],
 )
 def test_padvia_failure_exits_cleanly(monkeypatch, error):
     def fail(planner, options, settings):
@@ -247,6 +253,7 @@ def test_returnvia_passes_dry_run_and_kicad_cli_through(
         NoGroundNetsError("no ground"),
         overlay.OverlayLayersError("layers"),
         placement.SplitError("split"),
+        MarkerLayerError("Eco2"),
     ],
 )
 def test_returnvia_failure_exits_cleanly(monkeypatch, error):
@@ -310,6 +317,7 @@ def test_pourstitch_takes_ground_nets(monkeypatch):
         NoGroundNetsError("no ground"),
         OtherClassNetsError("other class"),
         NoBoardOutlineError("no outline"),
+        MarkerLayerError("Eco2"),
     ],
 )
 def test_pourstitch_placement_failure_exits_cleanly(monkeypatch, error):

@@ -13,7 +13,7 @@ from PIL import Image
 from shapely.geometry import box
 
 from kistitch import cli, overlay, pourstitch_command, render, returnvia_command
-from kistitch.commit import CreateItemsError, Marker, MarkerKind
+from kistitch.commit import CreateItemsError, Marker, MarkerKind, MarkerLayerError
 from kistitch.plan import Plan, PlannedUnit, UnfixableSpot
 from kistitch.raster import CoverageMap, Grid
 from kistitch.snapshot import NM_PER_MM, Snapshot, Via, ViaSize
@@ -532,11 +532,35 @@ def test_pourstitch_markers_follow_net():
     assert front.crosses == (("F.Cu", (5.0, 5.0)), ("B.Cu", (6.0, 6.0)))
 
 
-class ImageBoard:
-    def __init__(self, existing=(), refuse=False):
+COPPER_4 = (BL.BL_F_Cu, BL.BL_In1_Cu, BL.BL_In2_Cu, BL.BL_B_Cu)
+
+
+class LayersBoard:
+    """Board with an enabled-layer set that `set_enabled_layers` replaces."""
+
+    def __init__(self, copper=COPPER_4, enabled=(), refuse=()):
+        self.copper = list(copper)
+        self.enabled = [*self.copper, *enabled]
+        self.refuse = set(refuse)
+        self.set_calls: list = []
+
+    def get_copper_layer_count(self):
+        return len(self.copper)
+
+    def get_enabled_layers(self):
+        return list(self.enabled)
+
+    def set_enabled_layers(self, copper_layer_count, layers):
+        self.set_calls.append((copper_layer_count, list(layers)))
+        self.enabled = [*self.copper, *(L for L in layers if L not in self.refuse)]
+        return list(self.enabled)
+
+
+class ImageBoard(LayersBoard):
+    def __init__(self, existing=(), enabled=(BL.BL_Eco2_User,)):
+        super().__init__(enabled=enabled)
         self.calls: list = []
         self.existing = list(existing)
-        self.refuse = refuse
         self.visible = [BL.BL_F_Cu, BL.BL_User_2]
         self.visibility_calls: list = []
         self.shapes: list = []
@@ -567,6 +591,10 @@ class ImageBoard:
 
     def drop_commit(self, c):
         self.calls.append("drop_commit")
+
+    def set_enabled_layers(self, copper_layer_count, layers):
+        self.calls.append("set_enabled_layers")
+        return super().set_enabled_layers(copper_layer_count, layers)
 
 
 def image(tmp_path: Path) -> overlay.OverlayImage:
@@ -830,6 +858,66 @@ def test_placing_markers_with_overlays_shows_the_marker_layer(tmp_path, monkeypa
     assert set(board.visible) == {BL.BL_F_Cu, BL.BL_User_2, BL.BL_Eco2_User}
 
 
+def created_on_enabled_layers(created: list):
+    """create_checked as KiCad answers: an item on a disabled layer is refused."""
+
+    def create(board, items):
+        if any(i.layer not in board.enabled for i in items):
+            raise CreateItemsError("no overlapping layers")
+        created.extend(items)
+
+    return create
+
+
+def test_placing_markers_enables_the_marker_layer_before_the_commit(
+    tmp_path, monkeypatch, log
+):
+    created: list = []
+    monkeypatch.setattr(overlay, "create_checked", created_on_enabled_layers(created))
+    board = ImageBoard(enabled=(BL.BL_User_1, BL.BL_F_SilkS))
+
+    assert overlay.place_overlays(
+        board,  # type: ignore[arg-type]
+        [image(tmp_path)],
+        PLACEMENT,
+        ("User.1",),
+        "label",
+        markers=[Marker((1, 1), MarkerKind.UNFIXABLE)],
+    )
+
+    assert board.calls == [
+        "set_enabled_layers",
+        "begin_commit",
+        ("push_commit", "label"),
+    ]
+    [(_, layers)] = board.set_calls
+    assert sorted(layers) == sorted([BL.BL_User_1, BL.BL_F_SilkS, BL.BL_Eco2_User])
+    assert {i.layer for i in created} == {BL.BL_User_1, BL.BL_Eco2_User}
+    assert any("Enabled User.Eco2" in m and "undo" in m for m in log)
+
+
+def test_marker_layer_kicad_does_not_enable_fails_before_the_overlay_commit(
+    tmp_path, monkeypatch
+):
+    created: list = []
+    monkeypatch.setattr(overlay, "create_checked", created_on_enabled_layers(created))
+    board = ImageBoard(enabled=(BL.BL_User_1,))
+    board.refuse = {BL.BL_Eco2_User}
+
+    with pytest.raises(MarkerLayerError, match="Board Setup → Board Editor Layers"):
+        overlay.place_overlays(
+            board,  # type: ignore[arg-type]
+            [image(tmp_path)],
+            PLACEMENT,
+            ("User.1",),
+            "label",
+            markers=[Marker((1, 1), MarkerKind.UNFIXABLE)],
+        )
+
+    assert "begin_commit" not in board.calls
+    assert created == []
+
+
 def test_overlay_layers_already_visible_leave_visibility_alone(tmp_path, monkeypatch):
     monkeypatch.setattr(overlay, "create_checked", lambda board, items: None)
     board = ImageBoard()
@@ -1003,30 +1091,6 @@ def test_clear_removes_our_overlays_and_keeps_other_images(tmp_path, monkeypatch
     assert users_own not in board.removed
     assert any(getattr(s, "layer", None) == BL.BL_Eco2_User for s in board.removed)
     assert board.visibility_calls == []
-
-
-COPPER_4 = (BL.BL_F_Cu, BL.BL_In1_Cu, BL.BL_In2_Cu, BL.BL_B_Cu)
-
-
-class LayersBoard:
-    """Board with an enabled-layer set that `set_enabled_layers` replaces."""
-
-    def __init__(self, copper=COPPER_4, enabled=(), refuse=()):
-        self.copper = list(copper)
-        self.enabled = [*self.copper, *enabled]
-        self.refuse = set(refuse)
-        self.set_calls: list = []
-
-    def get_copper_layer_count(self):
-        return len(self.copper)
-
-    def get_enabled_layers(self):
-        return list(self.enabled)
-
-    def set_enabled_layers(self, copper_layer_count, layers):
-        self.set_calls.append((copper_layer_count, list(layers)))
-        self.enabled = [*self.copper, *(L for L in layers if L not in self.refuse)]
-        return list(self.enabled)
 
 
 def test_prepare_overlay_layers_enables_missing_layers_keeping_every_enabled_one(log):

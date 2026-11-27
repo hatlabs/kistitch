@@ -126,7 +126,9 @@ def slotted(ret):
 
 
 class Board:
-    def __init__(self, images=(), outline=BOARD, enabled=USER, shapes=()):
+    def __init__(
+        self, images=(), outline=BOARD, enabled=(*USER, MARKER_LAYER), shapes=()
+    ):
         self.calls: list = []
         self.images = list(images)
         self.shapes = list(shapes)
@@ -1428,6 +1430,31 @@ def test_check_overlay_replaces_markers_with_a_circle_per_unserved_end(fakes):
     image_layers = {i.layer for i in fakes.created if i.layer in USER}
     assert image_layers
     assert set(board.visible) == {BL.BL_F_Cu, BL.BL_Eco2_User, *image_layers}
+
+
+def test_check_overlay_on_a_board_without_the_marker_layer_enables_it(
+    fakes, monkeypatch
+):
+    def create_on_enabled_layers(board, items):
+        if any(i.layer not in board.enabled for i in items):
+            raise CreateItemsError("no overlapping layers")
+        fakes.created.extend(items)
+
+    monkeypatch.setattr(overlay, "create_checked", create_on_enabled_layers)
+    fakes.snap = slotted((SIG[0] + 1.4, SIG[1]))
+    board = Board(enabled=USER)
+
+    result = run(board, overlay=True)
+
+    assert board.calls == [
+        "refill_zones",
+        ("set_enabled_layers", len(FOUR_LAYERS), [*USER, MARKER_LAYER]),
+        "begin_commit",
+        ("push_commit", returnvia_command.OVERLAY_COMMIT),
+    ]
+    assert result.overlays_placed
+    assert eco2_created(fakes)
+    assert {i.layer for i in fakes.created} & set(USER)
 
 
 def test_check_overlay_circle_encloses_an_unserved_pad(fakes):

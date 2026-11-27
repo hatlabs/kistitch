@@ -33,6 +33,8 @@ from kistitch.commit import (
     CreateItemsError,
     Marker,
     create_checked,
+    enable_board_layers,
+    enable_marker_layer,
     marker_items,
     marker_shapes,
     show_layers,
@@ -117,15 +119,9 @@ def missing_layers(board: kipy.board.Board, layers: Sequence[str]) -> list[str]:
 
 
 def enable_layers(board: kipy.board.Board, layers: Sequence[str]) -> None:
-    """Add `layers` to the board's enabled layers.
-
-    KiCad replaces the whole set and deletes the contents of any layer left
-    out, so every enabled non-copper layer is passed back unchanged.
-    """
-    kept = [L for L in board.get_enabled_layers() if not is_copper_layer(L)]
-    added = [layer_from_canonical_name(L) for L in layers]
-    enabled = board.set_enabled_layers(board.get_copper_layer_count(), kept + added)
-    still = [L for L in layers if layer_from_canonical_name(L) not in enabled]
+    """Add the overlay `layers` to the board's enabled layers."""
+    refused = enable_board_layers(board, [layer_from_canonical_name(L) for L in layers])
+    still = [L for L in layers if layer_from_canonical_name(L) in refused]
     if still:
         raise OverlayLayersError(
             f"KiCad did not enable the overlay layers {', '.join(still)}. Enable "
@@ -290,13 +286,16 @@ def place_overlays(
     removed; with nothing to remove either, nothing is committed. Other
     reference images on those layers are left alone. `markers`, unless None,
     replace every shape on the marker layer in the same commit. The layers
-    that gain images or markers are made visible. If KiCad refuses an item,
-    nothing changes and the log says where to place the PNGs by hand.
+    that gain images or markers are made visible, and User.Eco2 is enabled
+    first if markers need it. If KiCad refuses an item, nothing changes and
+    the log says where to place the PNGs by hand.
     """
     old = overlays_on(board, overlay_layers, placement)
     stale = marker_shapes(board.get_shapes()) if markers is not None else []
     if not images and not old and not stale and not markers:
         return True
+    if markers:
+        enable_marker_layer(board)
     commit = board.begin_commit()
     try:
         if old or stale:
