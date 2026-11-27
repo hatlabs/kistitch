@@ -17,7 +17,7 @@ The DRC check uses `kicad-cli`. kistitch takes it from `--kicad-cli PATH`, then 
 
 If the board was edited in KiCad while the run was going, nothing is committed: DRC never saw the edit. Run it again.
 
-A dry run does the first three steps and commits nothing (see [Dry runs](cli.md#dry-runs)).
+A dry run does the second and third steps on the fills as they are, without the refill, and commits nothing (see [Dry runs](cli.md#dry-runs)).
 
 ## What the planners check
 
@@ -51,8 +51,8 @@ The markers always show the latest run's findings:
 These leave the markers alone:
 
 - a `--check` run without `--overlay`;
-- a `--check --overlay` run that can't place overlays, as in a dry run with the overlay layers disabled;
-- a dry run of a placing command;
+- a `--check --overlay` run that can't place overlays, as when KiCad refuses the images;
+- any dry run, with or without `--check --overlay`;
 - a run that stops with an error, such as a `pourstitch --nets` run that lists only nets of the other class.
 
 `kistitch clear` removes the markers without a run (see [Clearing](clearing.md)).
