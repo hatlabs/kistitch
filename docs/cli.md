@@ -92,7 +92,7 @@ Each refill adds an undo step in KiCad. Undoing a placement takes two Ctrl+Z: on
 Some things still happen in a dry run:
 
 - The zone refill before planning runs, unless refills are off.
-- `--overlay` still places its images. With `--check`, it also replaces every shape on User.Eco2, hand-drawn ones included, with the run's markers ([Check runs](heatmaps.md#check-runs)). Overlay layers that are disabled stay disabled, and the images are then only written to files ([Overlays on the board](heatmaps.md#overlays-on-the-board)).
+- `--overlay` still places its images. With `--check`, it also replaces every shape on User.Eco2, hand-drawn ones included, with the run's markers ([Check runs](heatmaps.md#check-runs)), enabling User.Eco2 for them if the board doesn't have it. Overlay layers that are disabled stay disabled, and the images are then only written to files ([Overlays on the board](heatmaps.md#overlays-on-the-board)).
 
 The heatmaps of a dry run include the planned vias. For `returnvia` they count as returns, except forced ones, so a dry run shows which via and pad ends the run would leave unserved.
 

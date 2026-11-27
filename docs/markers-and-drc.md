@@ -59,7 +59,7 @@ These leave the markers alone:
 
 ### Layer visibility
 
-A run that places markers makes User.Eco2 visible if it was hidden, keeping the other visible layers. This change is outside KiCad's undo history. A run that only removes markers, and `kistitch clear`, leave the visibility alone.
+A run that places markers enables User.Eco2 before its commit if the board doesn't have it, keeping the other enabled layers; if KiCad does not enable it, the run stops and commits nothing. The run also makes User.Eco2 visible if it was hidden, keeping the other visible layers. These changes are outside KiCad's undo history. A run that only removes markers, and `kistitch clear`, leave the visibility alone.
 
 ## Pour splits
 
